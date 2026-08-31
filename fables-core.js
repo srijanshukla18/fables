@@ -143,7 +143,12 @@
     return String(value);
   }
 
+  function titleExcerpt(value) {
+    return String(value || "").replace(/\s+/g, " ").trim().slice(0, 120);
+  }
+
   function finalize(meta, items, pending) {
+    meta.title = titleExcerpt(meta.title);
     if (pending) {
       for (const item of pending.values()) {
         if (item.output === null) meta.diagnostics.orphanCalls++;

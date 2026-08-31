@@ -343,8 +343,12 @@ body.standalone .exportall {
 }
 
 .mainhead h2 {
+  display: -webkit-box;
   min-width: 0;
+  overflow: hidden;
   flex: 1;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   font-size: 19px;
   font-weight: 650;
   line-height: 1.35;
@@ -495,6 +499,7 @@ body.standalone .actions {
 }
 
 .scroll {
+  min-height: 0;
   flex: 1;
   overflow-y: auto;
 }
