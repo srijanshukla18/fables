@@ -211,13 +211,17 @@ Exports contain a normalized Fables archive, not the original transcript.
 Choose **export all** in the library to create a ZIP with `manifest.json` and
 one UTF-8 `.jsonl` file per discovered session. Each JSONL file starts with a
 versioned session metadata record followed by one normalized passage per line.
-Sessions are processed independently, and the export uses the same privacy
-review and redaction choices as a single-session export.
+After privacy options are confirmed, sessions are loaded, parsed, redacted,
+compressed, and written independently in one pass through a shared parser
+worker. The export uses the same privacy and redaction choices as a
+single-session export.
 
-Reasoning, system context, and raw records are excluded by default. Before
-exporting, Fables scans for likely credentials, local paths, and email
-addresses, then lets you choose categories and redactions. Tool calls and
-outputs are included by default because they are part of the visible story.
+Reasoning, system context, and raw records are excluded by default. A
+single-session review scans for likely credentials, local paths, and email
+addresses before download. The all-session export performs that scan while it
+processes each session and records aggregate findings in `manifest.json`.
+Tool calls and outputs are included by default because they are part of the
+visible story.
 
 Secret detection is best-effort, not a security boundary. Always inspect the
 preview and treat exported files as potentially sensitive.

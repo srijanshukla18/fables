@@ -696,43 +696,68 @@ function renderSession() {
   $("shareBtn").disabled = false;
 }
 
+let parseWorker = null;
+let parseRequestId = 0;
+const parseRequests = new Map();
+
+function parseOnPage(request, warning) {
+  try {
+    const parsed = Core.parseSession(request.raw, request.format, request.source);
+    if (warning) parsed.meta.diagnostics.warnings.push(warning);
+    request.resolve(parsed);
+  } catch (error) {
+    request.reject(error);
+  }
+}
+
+function resetParseWorker(warning) {
+  if (parseWorker) parseWorker.terminate();
+  parseWorker = null;
+  const pending = [...parseRequests.values()];
+  parseRequests.clear();
+  for (const request of pending) parseOnPage(request, warning);
+}
+
+function sharedParseWorker() {
+  if (parseWorker) return parseWorker;
+  parseWorker = new Worker("/fables-worker.js");
+  parseWorker.addEventListener("message", (event) => {
+    const data = event.data || {};
+    const request = parseRequests.get(data.id);
+    if (!request) return;
+    parseRequests.delete(data.id);
+    if (data.parsed) request.resolve(data.parsed);
+    else parseOnPage(request,
+      "Background parsing failed; the session was parsed on the page.");
+  });
+  parseWorker.addEventListener("error", () => {
+    resetParseWorker("Background parser stopped; the session was parsed on the page.");
+  });
+  return parseWorker;
+}
+
 function parseOffThread(raw, format, source) {
   if (document.body.classList.contains("standalone") || !window.Worker) {
     return Promise.resolve(Core.parseSession(raw, format, source));
   }
-  return new Promise((resolve) => {
-    let settled = false;
+  return new Promise((resolve, reject) => {
     let worker;
     try {
-      worker = new Worker("/fables-worker.js");
+      worker = sharedParseWorker();
     } catch (error) {
       resolve(Core.parseSession(raw, format, source));
       return;
     }
-    const finish = (parsed) => {
-      if (settled) return;
-      settled = true;
-      worker.terminate();
-      resolve(parsed);
-    };
-    worker.addEventListener("message", (event) => {
-      if (event.data && event.data.parsed) finish(event.data.parsed);
-      else {
-        const parsed = Core.parseSession(raw, format, source);
-        parsed.meta.diagnostics.warnings.push(
-          "Background parsing failed; the session was parsed on the page."
-        );
-        finish(parsed);
-      }
-    });
-    worker.addEventListener("error", () => {
-      const parsed = Core.parseSession(raw, format, source);
-      parsed.meta.diagnostics.warnings.push(
-        "Background parsing failed; the session was parsed on the page."
-      );
-      finish(parsed);
-    }, { once: true });
-    worker.postMessage({ raw, format, source });
+    const id = ++parseRequestId;
+    const request = { raw, format, source, resolve, reject };
+    parseRequests.set(id, request);
+    try {
+      worker.postMessage({ id, raw, format, source });
+    } catch (error) {
+      parseRequests.delete(id);
+      parseOnPage(request,
+        "Background parsing could not start; the session was parsed on the page.");
+    }
   });
 }
 
@@ -1004,7 +1029,7 @@ function updateShareReview() {
   if (state.exportMode === "all") {
     const stats = state.exportStats || { sessions: 0, passages: 0, sourceBytes: 0 };
     $("shareEstimate").textContent = stats.sessions + " sessions · " +
-      stats.passages + " passages · " + fmtBytes(stats.sourceBytes) + " source data";
+      fmtBytes(stats.sourceBytes) + " source data · processed once during download";
     $("sharePreview").textContent = state.exportPreview.join("\n") || "(nothing selected)";
     return;
   }
@@ -1065,61 +1090,32 @@ async function loadSessionForExport(session) {
   return { session, parsed };
 }
 
-async function openExportAllReview() {
+function openExportAllReview() {
   if (!state.sessions.length || document.body.classList.contains("standalone")) return;
-  const button = $("exportAllBtn");
-  button.disabled = true;
   state.exportMode = "all";
-  state.exportEntries = [];
+  state.exportEntries = state.sessions.map((session) => ({ session }));
   state.exportFailures = [];
-  state.exportStats = { sessions: 0, passages: 0, sourceBytes: 0 };
-  state.exportPreview = [];
-  try {
-    const findings = { secrets: 0, paths: 0, emails: 0 };
-    for (let index = 0; index < state.sessions.length; index++) {
-      const session = state.sessions[index];
-      button.textContent = "preparing " + (index + 1) + "/" + state.sessions.length;
-      setLive("Preparing export " + (index + 1) + " of " + state.sessions.length + "…");
-      try {
-        const entry = await loadSessionForExport(session);
-        const found = Core.inspectSensitive(entry.parsed);
-        findings.secrets += found.secrets;
-        findings.paths += found.paths;
-        findings.emails += found.emails;
-        state.exportEntries.push({ session });
-        state.exportStats.sessions++;
-        state.exportStats.passages += entry.parsed.items.length;
-        state.exportStats.sourceBytes += Number(session.size) || 0;
-        if (state.exportPreview.length < 10) {
-          state.exportPreview.push("\n[session] " + session.title);
-          for (const item of entry.parsed.items.slice(0, 2)) {
-            if (state.exportPreview.length >= 10) break;
-            state.exportPreview.push("[" + item.kind + "] " +
-              String(item.text || "").replace(/\s+/g, " ").slice(0, 180));
-          }
-        }
-      } catch (error) {
-        state.exportFailures.push({ session, error: error.message });
-      }
-    }
-    if (!state.exportEntries.length) throw new Error("no sessions could be loaded");
-    $("shareTitle").textContent = "Review all-sessions export";
-    $("shareIntro").textContent =
-      "This creates one ZIP containing a manifest and one JSONL file per discovered session. " +
-      "Each line is a normalized record using the privacy choices below; hidden raw records " +
-      "remain excluded unless explicitly enabled." + (state.exportFailures.length ?
-        " " + state.exportFailures.length + " session(s) could not be loaded and will be omitted." : "");
-    $("exportBtn").textContent = "download all as zip";
-    showShareFindings(findings);
-    updateShareReview();
-    $("shareDialog").showModal();
-  } catch (error) {
-    window.alert("Export preparation failed: " + error.message);
-  } finally {
-    button.disabled = false;
-    button.textContent = "export all";
-    setLive("");
-  }
+  state.exportStats = {
+    sessions: state.sessions.length,
+    passages: 0,
+    sourceBytes: state.sessions.reduce(
+      (total, session) => total + (Number(session.size) || 0), 0
+    ),
+  };
+  state.exportPreview = state.sessions.slice(0, 10).map(
+    (session) => "[session] " + session.title
+  );
+  $("shareTitle").textContent = "Review all-sessions export";
+  $("shareIntro").textContent =
+    "This creates one ZIP containing a manifest and one JSONL file per discovered session. " +
+    "After you confirm, each session is loaded, normalized, redacted, and written exactly once.";
+  $("exportBtn").textContent = "download all as zip";
+  const findings = $("shareFindings");
+  findings.textContent =
+    "Sensitive-pattern scanning and the selected redactions run session by session during export.";
+  findings.classList.remove("warn");
+  updateShareReview();
+  $("shareDialog").showModal();
 }
 
 async function fetchAsset(path) {
@@ -1294,6 +1290,8 @@ async function exportAllZip(button, pickerPromise) {
   const zip = new ZipWriter(writable);
   const manifest = [];
   const failures = [];
+  const findings = { secrets: 0, paths: 0, emails: 0 };
+  let passages = 0;
   try {
     for (let index = 0; index < state.exportEntries.length; index++) {
       const session = state.exportEntries[index].session;
@@ -1301,6 +1299,11 @@ async function exportAllZip(button, pickerPromise) {
       setLive("Writing export " + (index + 1) + " of " + state.exportEntries.length + "…");
       try {
         const loaded = await loadSessionForExport(session);
+        const found = Core.inspectSensitive(loaded.parsed);
+        findings.secrets += found.secrets;
+        findings.paths += found.paths;
+        findings.emails += found.emails;
+        passages += loaded.parsed.items.length;
         const filename = "sessions/" + session.id + "-" + slug(session.title) + ".jsonl";
         const bytes = sessionJsonl(session, loaded.parsed, shareOptions());
         await zip.add(filename, bytes, session.mtime);
@@ -1316,6 +1319,8 @@ async function exportAllZip(button, pickerPromise) {
       exportedAt: new Date().toISOString(),
       sessions: manifest,
       failures,
+      findings,
+      passages,
     }, null, 2) + "\n");
     await zip.add("manifest.json", manifestBytes, Date.now());
     const blob = await zip.close();
