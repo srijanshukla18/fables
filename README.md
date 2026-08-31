@@ -214,7 +214,8 @@ versioned session metadata record followed by one normalized passage per line.
 After privacy options are confirmed, sessions are loaded, parsed, redacted,
 compressed, and written independently in one pass through a shared parser
 worker. The export uses the same privacy and redaction choices as a
-single-session export.
+single-session export. The completed archive is handed to the browser's normal
+download manager, with a temporary **download ZIP again** link in the page.
 
 Reasoning, system context, and raw records are excluded by default. A
 single-session review scans for likely credentials, local paths, and email

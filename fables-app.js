@@ -1285,8 +1285,33 @@ function sessionJsonl(session, parsed, options) {
   return new TextEncoder().encode(lines.join("\n") + "\n");
 }
 
-async function exportAllZip(button, pickerPromise) {
-  const writable = pickerPromise ? await (await pickerPromise).createWritable() : null;
+function offerDownload(blob, filename, cleanup) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.textContent = "download ZIP again";
+  const live = $("livestatus");
+  live.textContent = "Session archive ready. ";
+  live.appendChild(link);
+  link.click();
+  setTimeout(async () => {
+    URL.revokeObjectURL(url);
+    if (cleanup) await cleanup().catch(() => {});
+  }, 10 * 60 * 1000);
+}
+
+async function exportAllZip(button) {
+  let storageRoot = null;
+  let storageHandle = null;
+  let writable = null;
+  if (navigator.storage && navigator.storage.getDirectory) {
+    storageRoot = await navigator.storage.getDirectory();
+    storageHandle = await storageRoot.getFileHandle("fables-all-sessions.zip", {
+      create: true,
+    });
+    writable = await storageHandle.createWritable();
+  }
   const zip = new ZipWriter(writable);
   const manifest = [];
   const failures = [];
@@ -1323,35 +1348,28 @@ async function exportAllZip(button, pickerPromise) {
       passages,
     }, null, 2) + "\n");
     await zip.add("manifest.json", manifestBytes, Date.now());
-    const blob = await zip.close();
-    if (blob) {
-      const link = document.createElement("a");
-      link.href = URL.createObjectURL(blob);
-      link.download = "fables-all-sessions.zip";
-      link.click();
-      setTimeout(() => URL.revokeObjectURL(link.href), 5000);
-    }
+    let blob = await zip.close();
+    if (!blob && storageHandle) blob = await storageHandle.getFile();
+    offerDownload(blob, "fables-all-sessions.zip", storageRoot ?
+      () => storageRoot.removeEntry("fables-all-sessions.zip") : null);
     state.exportFailures.push(...failures);
   } catch (error) {
     if (writable) await writable.abort().catch(() => {});
+    if (storageRoot) {
+      await storageRoot.removeEntry("fables-all-sessions.zip").catch(() => {});
+    }
     throw error;
   }
 }
 
 async function exportStandalone() {
   const button = $("exportBtn");
-  const pickerPromise = state.exportMode === "all" && window.showSaveFilePicker ?
-    window.showSaveFilePicker({
-      suggestedName: "fables-all-sessions.zip",
-      types: [{ description: "ZIP archive", accept: { "application/zip": [".zip"] } }],
-    }) : null;
   button.disabled = true;
   button.textContent = "binding…";
   try {
     if (state.exportMode === "all") {
-      await exportAllZip(button, pickerPromise);
+      await exportAllZip(button);
       $("shareDialog").close();
-      setLive("Session archive exported.");
       return;
     }
     const assets = await Promise.all([
