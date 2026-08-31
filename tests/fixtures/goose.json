@@ -1,0 +1,37 @@
+{
+  "session": {
+    "id": "goose-fixture",
+    "name": "Fixture Goose session",
+    "working_dir": "/Users/example/code/goose",
+    "created_at": "2026-07-01T00:00:00Z",
+    "updated_at": "2026-07-01T00:00:04Z",
+    "model_config_json": {"model": "goose-fixture"},
+    "input_tokens": 12,
+    "output_tokens": 6
+  },
+  "messages": [
+    {
+      "message_id": "gm1",
+      "role": "user",
+      "created_timestamp": "2026-07-01T00:00:01Z",
+      "content_json": {"type": "text", "text": "Test Goose parsing."}
+    },
+    {
+      "message_id": "gm2",
+      "role": "assistant",
+      "created_timestamp": "2026-07-01T00:00:02Z",
+      "content_json": [
+        {"type": "reasoning", "text": "Inspect."},
+        {"type": "tool_request", "id": "goose-tool", "name": "shell", "arguments": {"command": "echo safe"}},
+        {"type": "text", "text": "Running."}
+      ]
+    },
+    {
+      "message_id": "gm3",
+      "role": "tool",
+      "created_timestamp": "2026-07-01T00:00:03Z",
+      "content_json": {"type": "tool_response", "tool_call_id": "goose-tool", "content": "safe"}
+    }
+  ],
+  "usage": []
+}

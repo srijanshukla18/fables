@@ -1,0 +1,5 @@
+{"role":"user","message":{"content":[{"type":"text","text":"Inspect the fixture."}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"Let me look."},{"type":"tool_use","name":"Shell","input":{"command":"ls demo"}}]}}
+{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"path":"fixture.txt"}}]}}
+{"role":"user","message":{"content":[{"type":"text","text":"What did you find?"}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"The fixture is clean."}]}}

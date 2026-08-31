@@ -1,0 +1,9 @@
+{"type":"session","version":"3","id":"019ff1cd-f1ab-7a8a-966b-bd6a2099c3db","timestamp":"2026-08-11T17:10:33.643Z","cwd":"/Users/example/code/demo"}
+{"type":"model_change","id":"m1","parentId":null,"timestamp":"2026-08-11T17:10:34Z","provider":"anthropic","modelId":"claude-fixture"}
+{"type":"thinking_level_change","id":"t1","parentId":null,"timestamp":"2026-08-11T17:10:35Z","thinkingLevel":"high"}
+{"type":"message","id":"u1","parentId":null,"timestamp":"2026-08-11T17:10:36Z","message":{"role":"user","content":"Please inspect the fixture.","timestamp":"1786468337343"}}
+{"type":"message","id":"a1","parentId":"u1","timestamp":"2026-08-11T17:10:37Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Need a tool."},{"type":"text","text":"Let me look."},{"type":"toolCall","id":"call_1","name":"read","arguments":{"path":"fixture.txt"}}],"timestamp":"1786468337344"}}
+{"type":"message","id":"r1","parentId":"a1","timestamp":"2026-08-11T17:10:38Z","message":{"role":"toolResult","toolCallId":"call_1","toolName":"read","content":[{"type":"text","text":"fixture contents"}],"isError":false,"timestamp":"1786468337345"}}
+{"type":"message","id":"b1","parentId":"a1","timestamp":"2026-08-11T17:10:39Z","message":{"role":"bashExecution","command":"ls demo","output":"file.txt","exitCode":0,"timestamp":"1786468337346"}}
+{"type":"custom","customType":"user_instructions","data":{},"id":"c1","parentId":null,"timestamp":"2026-08-11T17:10:40Z"}
+{"type":"message","id":"a2","parentId":"u1","timestamp":"2026-08-11T17:10:41Z","message":{"role":"assistant","content":[{"type":"text","text":"Done."}],"timestamp":"1786468337347"}}

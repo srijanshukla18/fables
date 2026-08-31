@@ -1,0 +1,34 @@
+{
+  "session": {
+    "id": "opencode-fixture",
+    "title": "Fixture OpenCode session",
+    "directory": "/Users/example/code/opencode",
+    "time": {"created": 1775000000000, "updated": 1775000004000}
+  },
+  "messages": [
+    {
+      "message": {
+        "id": "m1",
+        "role": "user",
+        "time": {"created": 1775000001000}
+      },
+      "parts": [
+        {"id": "p1", "type": "text", "text": "Test OpenCode parsing."}
+      ]
+    },
+    {
+      "message": {
+        "id": "m2",
+        "role": "assistant",
+        "modelID": "opencode-fixture",
+        "tokens": {"input": 8, "output": 3, "reasoning": 1, "cache": {"read": 2}},
+        "time": {"created": 1775000002000}
+      },
+      "parts": [
+        {"id": "p2","type":"reasoning","text":"Inspect."},
+        {"id": "p3","type":"tool","tool":"shell","state":{"status":"completed","input":{"command":"echo safe"},"output":"safe"}},
+        {"id": "p4","type":"text","text":"Done."}
+      ]
+    }
+  ]
+}

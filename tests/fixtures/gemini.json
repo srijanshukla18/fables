@@ -1,0 +1,24 @@
+{
+  "sessionId": "gemini-fixture",
+  "projectHash": "fixture",
+  "startTime": "2026-04-01T00:00:00Z",
+  "lastUpdated": "2026-04-01T00:00:04Z",
+  "messages": [
+    {
+      "id": "g1",
+      "timestamp": "2026-04-01T00:00:01Z",
+      "type": "user",
+      "content": "Test Gemini parsing."
+    },
+    {
+      "id": "g2",
+      "timestamp": "2026-04-01T00:00:02Z",
+      "type": "gemini",
+      "model": "gemini-fixture",
+      "content": "Done.",
+      "thoughts": [{"text": "Inspect first."}],
+      "tokens": {"input": 9, "output": 4, "thoughts": 2},
+      "toolCalls": [{"name": "read_file","args": {"path": "fixture.txt"},"result": "safe","status": "success"}]
+    }
+  ]
+}

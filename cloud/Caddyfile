@@ -1,0 +1,6 @@
+# Caddy reverse proxy for fables-cloud.
+# Replace fables.example.com with your domain. Caddy obtains the TLS
+# certificate automatically (needs ports 80/443 open).
+fables.example.com {
+	reverse_proxy 127.0.0.1:8000
+}

@@ -1,0 +1,33 @@
+{
+  "metadata": {
+    "taskId": "cline-fixture",
+    "task": "Fixture Cline session",
+    "workspaceDirectory": "/Users/example/code/cline",
+    "createdAt": "2026-06-01T00:00:00Z",
+    "updatedAt": "2026-06-01T00:00:03Z",
+    "tokensIn": 10,
+    "tokensOut": 5
+  },
+  "apiMessages": [
+    {
+      "role": "user",
+      "ts": "2026-06-01T00:00:01Z",
+      "content": [{"type": "text", "text": "Test Cline parsing."}]
+    },
+    {
+      "role": "assistant",
+      "ts": "2026-06-01T00:00:02Z",
+      "content": [
+        {"type": "thinking", "thinking": "Inspect."},
+        {"type": "tool_use", "id": "cline-tool", "name": "read_file", "input": {"path": "fixture.txt"}},
+        {"type": "text", "text": "Done."}
+      ]
+    },
+    {
+      "role": "user",
+      "ts": "2026-06-01T00:00:03Z",
+      "content": [{"type": "tool_result", "tool_use_id": "cline-tool", "content": "safe"}]
+    }
+  ],
+  "uiMessages": []
+}

@@ -1,0 +1,46 @@
+{
+  "session": {
+    "version": 3,
+    "creationDate": 1780000000000,
+    "customTitle": "Fixture VS Code session",
+    "sessionId": "vscode-fixture",
+    "workingDirectory": "/Users/example/code/vscode",
+    "inputState": {
+      "selectedModel": {"identifier": "vscode-fixture"},
+      "mode": {"id": "agent"}
+    },
+    "requests": [
+      {
+        "requestId": "vr1",
+        "timestamp": 1780000001000,
+        "modelId": "vscode-fixture",
+        "message": {"text": "Test VS Code parsing."},
+        "response": [
+          {"kind": "thinking", "value": "Inspect."},
+          {"value": "Done."}
+        ],
+        "result": {
+          "metadata": {
+            "toolCallRounds": [
+              {
+                "timestamp": 1780000002000,
+                "thinking": {"text": "Use a tool.", "tokens": 2},
+                "toolCalls": [
+                  {"id": "vscode-tool", "name": "read_file", "arguments": {"path": "fixture.txt"}}
+                ]
+              }
+            ],
+            "toolCallResults": {
+              "vscode-tool": {"content": [{"kind": "text", "value": "safe"}]}
+            }
+          }
+        }
+      }
+    ]
+  },
+  "diagnostics": {
+    "format": "objectMutationLog",
+    "operationCount": 4,
+    "ignoredTornLines": 1
+  }
+}

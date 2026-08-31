@@ -1,0 +1,9 @@
+{"role": "_checkpoint", "id": 0}
+{"role": "user", "content": "What files are here?"}
+{"role": "_checkpoint", "id": 1}
+{"role": "_usage", "token_count": 8906}
+{"role": "assistant", "content": [{"type": "think", "think": "Need a tool."}, {"type": "text", "text": "Let me look."}]}
+{"role": "_checkpoint", "id": 2}
+{"role": "tool", "content": [{"type": "text", "text": "file.txt"}], "tool_call_id": "tool_0uHuaY0qE8A8A4EuxPF4tp59"}
+{"role": "_checkpoint", "id": 3}
+{"role": "assistant", "content": [{"type": "text", "text": "There is one file."}]}

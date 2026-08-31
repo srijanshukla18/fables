@@ -1,0 +1,7 @@
+{"type":"summary","summary":"Fixture Claude session"}
+{"type":"user","timestamp":"2026-01-01T00:00:00Z","message":{"content":"Set effort level to high"}}
+{"type":"user","timestamp":"2026-01-01T00:00:01Z","cwd":"/Users/example/code/demo","gitBranch":"main","message":{"content":"Please inspect the fixture."}}
+{"type":"assistant","timestamp":"2026-01-01T00:00:02Z","message":{"model":"claude-fixture","usage":{"input_tokens":12,"output_tokens":8,"cache_read_input_tokens":4},"content":[{"type":"thinking","thinking":"I should inspect it."},{"type":"text","text":"I will inspect it."},{"type":"tool_use","id":"tool-1","name":"read","input":{"path":"fixture.txt"}}]}}
+{"type":"user","timestamp":"2026-01-01T00:00:03Z","message":{"content":[{"type":"tool_result","tool_use_id":"tool-1","content":"fixture contents"}]}}
+{"type":"future-record","timestamp":"2026-01-01T00:00:04Z"}
+{"torn":

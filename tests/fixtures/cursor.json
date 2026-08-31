@@ -1,0 +1,28 @@
+{
+  "composer": {
+    "composerId": "cursor-fixture",
+    "name": "Fixture Cursor session",
+    "workspaceProjectDir": "/Users/example/code/cursor",
+    "createdAt": 1776000000000,
+    "lastUpdatedAt": 1776000004000,
+    "model": "cursor-fixture"
+  },
+  "bubbles": [
+    {
+      "bubbleId": "b1",
+      "type": 1,
+      "text": "Test Cursor parsing.",
+      "createdAt": 1776000001000,
+      "tokenCount": {"inputTokens": 6}
+    },
+    {
+      "bubbleId": "b2",
+      "type": 2,
+      "thinking": {"text": "Inspect."},
+      "text": "Done.",
+      "createdAt": 1776000002000,
+      "tokenCount": {"outputTokens": 3},
+      "modelInfo": {"modelName": "cursor-fixture"}
+    }
+  ]
+}

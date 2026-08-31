@@ -1,0 +1,6 @@
+{"id":"e1","parentId":null,"timestamp":"2026-03-01T00:00:00Z","type":"session.start","data":{"context":{"cwd":"/Users/example/code/copilot","branch":"main"},"selectedModel":"fixture-model","reasoningEffort":"high"}}
+{"id":"e2","parentId":"e1","timestamp":"2026-03-01T00:00:01Z","type":"user.message","data":{"content":"Test Copilot parsing."}}
+{"id":"e3","parentId":"e2","timestamp":"2026-03-01T00:00:02Z","type":"assistant.message","data":{"content":"I will run a tool.","reasoningText":"Need a tool.","model":"fixture-model","outputTokens":5}}
+{"id":"e4","parentId":"e3","timestamp":"2026-03-01T00:00:03Z","type":"tool.execution_start","data":{"toolCallId":"tool-1","toolName":"shell","arguments":{"command":"echo safe"},"model":"fixture-model"}}
+{"id":"e5","parentId":"e4","timestamp":"2026-03-01T00:00:04Z","type":"tool.execution_complete","data":{"toolCallId":"tool-1","success":true,"result":{"output":"safe"}}}
+{"id":"e6","parentId":"e5","timestamp":"2026-03-01T00:00:05Z","type":"session.shutdown","data":{"currentModel":"fixture-model","tokenDetails":{"input":{"tokenCount":20},"output":{"tokenCount":5},"cache_read":{"tokenCount":2},"cache_write":{"tokenCount":1}}}}

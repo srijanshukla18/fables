@@ -1,0 +1,164 @@
+#!/bin/sh
+# Fables control command
+
+set -eu
+
+LABEL="com.srijanshukla.fables"
+INSTALL_DIR="${FABLES_HOME:-$HOME/.local/share/fables}"
+PORT_FILE="$INSTALL_DIR/.port"
+PLATFORM="${FABLES_PLATFORM:-$(uname -s)}"
+PORT=8321
+[ ! -f "$PORT_FILE" ] || PORT=$(sed -n '1p' "$PORT_FILE")
+URL="http://localhost:$PORT"
+
+usage() {
+    cat <<EOF
+Usage: fables [command]
+
+Commands:
+  open       Open Fables in the default browser (default)
+  mcp        Run the stateless MCP server over stdio (for Codex CLI and other agents)
+  mcp-http   Run the MCP server over HTTP on port 8322 (for Prime Agent)
+  mcp-install  Register fables-mcp with every supported coding agent
+  mcp-remove   Unregister fables-mcp everywhere
+  start      Start the background service
+  stop       Stop until the next login or an explicit start
+  restart    Restart the background service
+  status     Show service status
+  logs       Follow service logs
+  url        Print the local URL
+  uninstall  Remove Fables and its background service
+  help       Show this help
+EOF
+}
+
+require_install() {
+    [ -f "$INSTALL_DIR/serve.py" ] || {
+        printf 'Fables is not installed at %s\n' "$INSTALL_DIR" >&2
+        exit 1
+    }
+}
+
+mac_domain() {
+    printf 'gui/%s' "$(id -u)"
+}
+
+start_service() {
+    require_install
+    case "$PLATFORM" in
+        Darwin)
+            domain=$(mac_domain)
+            plist="$HOME/Library/LaunchAgents/$LABEL.plist"
+            if launchctl print "$domain/$LABEL" >/dev/null 2>&1; then
+                launchctl kickstart -k "$domain/$LABEL"
+            else
+                launchctl bootstrap "$domain" "$plist"
+            fi
+            ;;
+        Linux) systemctl --user start fables.service ;;
+        *) printf 'Unsupported operating system: %s\n' "$PLATFORM" >&2; exit 1 ;;
+    esac
+}
+
+stop_service() {
+    case "$PLATFORM" in
+        Darwin)
+            launchctl bootout "$(mac_domain)" "$HOME/Library/LaunchAgents/$LABEL.plist" \
+                >/dev/null 2>&1 || true
+            ;;
+        Linux) systemctl --user stop fables.service ;;
+        *) printf 'Unsupported operating system: %s\n' "$PLATFORM" >&2; exit 1 ;;
+    esac
+}
+
+ensure_started() {
+    require_install
+    case "$PLATFORM" in
+        Darwin)
+            if ! launchctl print "$(mac_domain)/$LABEL" >/dev/null 2>&1; then
+                launchctl bootstrap "$(mac_domain)" "$HOME/Library/LaunchAgents/$LABEL.plist"
+            fi
+            ;;
+        Linux)
+            systemctl --user is-active --quiet fables.service \
+                || systemctl --user start fables.service
+            ;;
+        *) printf 'Unsupported operating system: %s\n' "$PLATFORM" >&2; exit 1 ;;
+    esac
+}
+
+command=${1:-open}
+case "$command" in
+    mcp)
+        require_install
+        shift 2>/dev/null || true
+        exec python3 "$INSTALL_DIR/fables-mcp.py" "$@"
+        ;;
+    mcp-http)
+        require_install
+        shift 2>/dev/null || true
+        exec python3 "$INSTALL_DIR/fables-mcp.py" --http "$@"
+        ;;
+    mcp-install)
+        require_install
+        shift 2>/dev/null || true
+        exec python3 "$INSTALL_DIR/install-mcp.py" "$@"
+        ;;
+    mcp-remove)
+        require_install
+        shift 2>/dev/null || true
+        exec python3 "$INSTALL_DIR/install-mcp.py" --remove "$@"
+        ;;
+    open)
+        ensure_started
+        if [ "$PLATFORM" = "Darwin" ]; then
+            open "$URL"
+        elif [ "$PLATFORM" = "Linux" ] && command -v xdg-open >/dev/null 2>&1; then
+            xdg-open "$URL" >/dev/null 2>&1
+        else
+            printf '%s\n' "$URL"
+        fi
+        ;;
+    start)
+        start_service
+        printf 'Fables started at %s\n' "$URL"
+        ;;
+    stop)
+        stop_service
+        printf 'Fables stopped until the next login. Run `fables start` to start it now.\n'
+        ;;
+    restart)
+        stop_service
+        start_service
+        printf 'Fables restarted at %s\n' "$URL"
+        ;;
+    status)
+        case "$PLATFORM" in
+            Darwin) launchctl print "$(mac_domain)/$LABEL" ;;
+            Linux) systemctl --user status --no-pager fables.service ;;
+            *) printf 'Unsupported operating system: %s\n' "$PLATFORM" >&2; exit 1 ;;
+        esac
+        ;;
+    logs)
+        case "$PLATFORM" in
+            Darwin)
+                mkdir -p "$HOME/Library/Logs/Fables"
+                touch "$HOME/Library/Logs/Fables/fables.log" "$HOME/Library/Logs/Fables/fables.error.log"
+                tail -f "$HOME/Library/Logs/Fables/fables.log" "$HOME/Library/Logs/Fables/fables.error.log"
+                ;;
+            Linux) journalctl --user -u fables.service -f ;;
+            *) printf 'Unsupported operating system: %s\n' "$PLATFORM" >&2; exit 1 ;;
+        esac
+        ;;
+    url) printf '%s\n' "$URL" ;;
+    uninstall)
+        require_install
+        exec "$INSTALL_DIR/uninstall.sh"
+        ;;
+    help|-h|--help) usage ;;
+    *)
+        printf 'Unknown command: %s\n\n' "$command" >&2
+        usage >&2
+        exit 1
+        ;;
+esac
