@@ -1,21 +1,21 @@
 :root {
-  --bg: #16130e;
-  --panel: #1d1812;
-  --panel-2: #241e15;
-  --line: #322a1e;
-  --line-soft: #2a2318;
-  --ink: #e9e1d0;
-  --muted: #998d74;
-  --faint: #6d6350;
-  --amber: #e3b341;
-  --amber-dim: #8a6d2a;
-  --coral: #d97757;
-  --teal: #7fd4c1;
-  --violet: #a99ac6;
-  --red: #e5695e;
-  --green: #9ab87a;
-  --blue: #82aee8;
-  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+  --bg: #0e0e11;
+  --panel: #151518;
+  --panel-2: #1c1c21;
+  --line: #2a2a31;
+  --line-soft: #222228;
+  --ink: #ededf1;
+  --muted: #a2a2ad;
+  --faint: #6e6e7a;
+  --amber: #e8b15c;
+  --amber-dim: #9a7638;
+  --coral: #e0785c;
+  --teal: #6fd6c2;
+  --violet: #b0a1e0;
+  --red: #ef6e62;
+  --green: #8fd07e;
+  --blue: #7fb0f0;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
 
@@ -35,16 +35,20 @@ body {
   overflow: hidden;
   background: var(--bg);
   color: var(--ink);
-  font-family: var(--serif);
+  font-family: var(--sans);
 }
 
 ::selection {
-  background: var(--amber-dim);
+  background: rgba(232, 177, 92, 0.28);
   color: var(--ink);
 }
 
 a {
-  color: var(--amber);
+  color: var(--blue);
+}
+
+a:hover {
+  color: #a5c8f7;
 }
 
 button,
@@ -97,9 +101,9 @@ body.standalone .exportall {
 }
 
 .brand h1 {
-  font-size: 26px;
-  font-weight: 600;
-  letter-spacing: 0.5px;
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
 }
 
 .brand h1 span {
@@ -213,12 +217,13 @@ body.standalone .exportall {
 
 .shelf::-webkit-scrollbar,
 .scroll::-webkit-scrollbar {
-  width: 9px;
+  width: 10px;
 }
 
 .shelf::-webkit-scrollbar-thumb,
 .scroll::-webkit-scrollbar-thumb {
-  border-radius: 5px;
+  border: 3px solid var(--bg);
+  border-radius: 6px;
   background: var(--line);
 }
 
@@ -227,10 +232,14 @@ body.standalone .exportall {
   width: 100%;
   padding: 10px 12px;
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: 10px;
   background: transparent;
   color: var(--ink);
   text-align: left;
+}
+
+.card:hover {
+  border-color: var(--line-soft);
 }
 
 .card:hover {
@@ -336,9 +345,10 @@ body.standalone .exportall {
 .mainhead h2 {
   min-width: 0;
   flex: 1;
-  font-size: 21px;
-  font-weight: 600;
-  line-height: 1.3;
+  font-size: 19px;
+  font-weight: 650;
+  line-height: 1.35;
+  letter-spacing: -0.01em;
 }
 
 .actions {
@@ -513,15 +523,15 @@ body.standalone .actions {
 }
 
 .welcome .glyph {
-  color: var(--amber-dim);
+  color: var(--amber);
   font-size: 40px;
 }
 
 .welcome h3 {
   margin-top: 18px;
-  color: var(--muted);
-  font-size: 20px;
-  font-weight: 500;
+  color: var(--ink);
+  font-size: 21px;
+  font-weight: 600;
 }
 
 .welcome p {
@@ -538,12 +548,22 @@ body.standalone .actions {
 
 .turnmark {
   position: relative;
-  margin: 30px 0 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 34px 0 14px;
   color: var(--faint);
   font-family: var(--mono);
   font-size: 10px;
   letter-spacing: 1.5px;
   text-transform: uppercase;
+}
+
+.turnmark::after {
+  flex: 1;
+  height: 1px;
+  background: var(--line-soft);
+  content: "";
 }
 
 .turnmark::before {
@@ -560,22 +580,83 @@ body.standalone .actions {
   align-items: center;
   gap: 8px;
   margin-bottom: 6px;
+  color: var(--faint);
   font-family: var(--mono);
   font-size: 10px;
   letter-spacing: 1.5px;
   text-transform: uppercase;
 }
 
-.item.user .speaker {
+.rolebadge {
+  padding: 2px 8px 3px;
+  border-radius: 5px;
+  font-size: 9px;
+  letter-spacing: 1.2px;
+}
+
+.rolebadge.you {
+  background: rgba(227, 179, 65, 0.14);
   color: var(--amber);
 }
 
-.item.assistant .speaker {
+.rolebadge.agent {
+  background: rgba(217, 119, 87, 0.13);
   color: var(--coral);
 }
 
+.speakertime {
+  font-size: 9.5px;
+  letter-spacing: 0.5px;
+  text-transform: none;
+}
+
+.item.user,
+.item.assistant {
+  display: flex;
+  flex-direction: column;
+}
+
+.item.user {
+  align-items: flex-end;
+}
+
+.item.assistant {
+  align-items: stretch;
+}
+
+.copybtn {
+  margin-top: 4px;
+  padding: 1px 8px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: none;
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.6px;
+  opacity: 0;
+}
+
+.item:hover .copybtn,
+.copybtn:focus-visible {
+  opacity: 0.85;
+}
+
+.copybtn:hover {
+  border-color: var(--line);
+  color: var(--amber);
+  opacity: 1;
+}
+
+.item.assistant .copybtn {
+  align-self: flex-start;
+}
+
 .runmark {
-  margin: 18px 0 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 20px 0 12px;
   color: var(--faint);
   font-family: var(--mono);
   font-size: 10px;
@@ -583,6 +664,9 @@ body.standalone .actions {
 }
 
 .runmark b {
+  padding: 1px 9px;
+  border: 1px solid var(--line-soft);
+  border-radius: 99px;
   color: var(--muted);
   font-weight: 500;
 }
@@ -593,15 +677,19 @@ body.standalone .actions {
 }
 
 .prose {
-  font-size: 15.5px;
-  line-height: 1.65;
+  font-size: 15px;
+  line-height: 1.68;
+  letter-spacing: 0.01em;
 }
 
 .item.user .prose {
-  padding: 12px 16px;
-  border-left: 2px solid var(--amber-dim);
-  border-radius: 0 8px 8px 0;
-  background: rgba(227, 179, 65, 0.045);
+  max-width: 78%;
+  padding: 10px 15px;
+  border: 1px solid var(--line);
+  border-radius: 16px 16px 5px 16px;
+  background: #232329;
+  border-color: #303038;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.3);
 }
 
 .prose p {
@@ -662,8 +750,8 @@ body.standalone .actions {
   padding: 12px 14px;
   overflow-x: auto;
   border: 1px solid var(--line-soft);
-  border-radius: 8px;
-  background: #100e09;
+  border-radius: 10px;
+  background: #0a0a0d;
 }
 
 .prose pre.code[data-lang]::after {
@@ -681,7 +769,7 @@ body.standalone .actions {
   padding: 0;
   border: 0;
   background: none;
-  color: #cfc6b2;
+  color: #d6d6de;
   font-size: 12.5px;
   line-height: 1.55;
   white-space: pre;
@@ -701,6 +789,21 @@ details.think summary,
 details.info summary {
   cursor: pointer;
   list-style: none;
+}
+
+details.think > summary::before,
+details.tool > summary::before,
+details.info > summary::before {
+  display: inline-block;
+  margin-right: 7px;
+  color: var(--faint);
+  content: "›";
+  font-size: 11px;
+  transition: transform 0.15s ease;
+}
+
+details[open] > summary::before {
+  transform: rotate(90deg);
 }
 
 details.think summary::-webkit-details-marker,
@@ -773,9 +876,26 @@ details.tool .tstat {
   font-size: 11px;
 }
 
-.tstat.ok { color: var(--green); }
-.tstat.err { color: var(--red); }
-.tstat.none { color: var(--faint); }
+.tstat {
+  padding: 1px 8px;
+  border-radius: 99px;
+  letter-spacing: 0.6px;
+}
+
+.tstat.ok {
+  background: rgba(154, 184, 122, 0.13);
+  color: var(--green);
+}
+
+.tstat.err {
+  background: rgba(229, 105, 94, 0.13);
+  color: var(--red);
+}
+
+.tstat.none {
+  background: var(--panel-2);
+  color: var(--faint);
+}
 
 details.tool .tbody {
   padding: 10px 12px;
@@ -796,14 +916,14 @@ details.tool .tlabel:first-child {
 
 details.tool pre,
 pre.rawview {
-  padding: 8px 10px;
+  padding: 10px 12px;
   overflow-y: auto;
-  border-radius: 6px;
-  background: #100e09;
-  color: #c4bba7;
+  border-radius: 8px;
+  background: #0a0a0d;
+  color: #c9c9d2;
   font-family: var(--mono);
   font-size: 11.5px;
-  line-height: 1.5;
+  line-height: 1.55;
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -846,6 +966,11 @@ details.tool pre.errout {
 }
 
 .info .ilabel {
+  padding: 1px 7px;
+  border: 1px solid var(--line-soft);
+  border-radius: 99px;
+  background: rgba(154, 184, 122, 0.08);
+  color: var(--green);
   font-size: 9.5px;
   letter-spacing: 1px;
   text-transform: uppercase;
@@ -878,6 +1003,11 @@ details.info pre {
 .item:hover .rawbtn,
 .rawbtn:focus-visible {
   opacity: 0.75;
+}
+
+.item.user .rawbtn {
+  right: auto;
+  left: -6px;
 }
 
 .rawbtn:hover {
@@ -1035,6 +1165,10 @@ dialog::backdrop {
     margin-top: 5px;
     opacity: 0.62;
   }
+
+  .copybtn {
+    opacity: 0.62;
+  }
 }
 
 @media (max-width: 880px) {
@@ -1077,6 +1211,10 @@ dialog::backdrop {
 
   .mainhead .row1 {
     align-items: flex-start;
+  }
+
+  .item.user .prose {
+    max-width: 94%;
   }
 
   .searchrow {

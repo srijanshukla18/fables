@@ -237,6 +237,41 @@ function toolArgSummary(input) {
   ).join(", ").slice(0, 100) : "";
 }
 
+function copyText(text, done) {
+  const fallback = () => {
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.select();
+    try {
+      if (document.execCommand("copy")) done();
+    } catch (error) { /* clipboard unavailable */ }
+    area.remove();
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done, fallback);
+  } else {
+    fallback();
+  }
+}
+
+function copyButton(text) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "copybtn";
+  button.textContent = "copy";
+  button.title = "Copy this message";
+  button.addEventListener("click", () => {
+    copyText(String(text || ""), () => {
+      button.textContent = "copied";
+      setTimeout(() => { button.textContent = "copy"; }, 1200);
+    });
+  });
+  return button;
+}
+
 function runLabel(run) {
   return run && run.model ? String(run.model) : "";
 }
@@ -399,7 +434,16 @@ function renderItem(item, index, turnNo, runChanged, forceTurnMark) {
   if (item.kind === "user" || item.kind === "assistant") {
     const speaker = document.createElement("div");
     speaker.className = "speaker";
-    speaker.append(item.kind === "user" ? "you" : "the machine");
+    const role = document.createElement("span");
+    role.className = "rolebadge " + (item.kind === "user" ? "you" : "agent");
+    role.textContent = item.kind === "user" ? "you" : "agent";
+    speaker.appendChild(role);
+    if (item.ts) {
+      const when = document.createElement("span");
+      when.className = "speakertime";
+      when.textContent = fmtTime(item.ts);
+      speaker.appendChild(when);
+    }
     if (item.side) {
       const badge = document.createElement("span");
       badge.className = "badge";
@@ -415,12 +459,12 @@ function renderItem(item, index, turnNo, runChanged, forceTurnMark) {
     const prose = document.createElement("div");
     prose.className = "prose";
     prose.innerHTML = md(item.text);
-    element.append(speaker, prose);
+    element.append(speaker, prose, copyButton(item.text));
   } else if (item.kind === "thinking") {
     const details = document.createElement("details");
     details.className = "think";
     const summary = document.createElement("summary");
-    summary.textContent = "✳ thinking · " + String(item.text || "").length + " chars";
+    summary.textContent = "thinking · " + String(item.text || "").length + " chars";
     const prose = document.createElement("div");
     prose.className = "prose";
     prose.innerHTML = md(item.text);
@@ -431,10 +475,10 @@ function renderItem(item, index, turnNo, runChanged, forceTurnMark) {
     details.className = "tool";
     const summary = document.createElement("summary");
     const status = item.output === null || item.output === undefined ?
-      ["none", "·"] : item.isError ? ["err", "✗"] : ["ok", "✓"];
+      ["none", "no result"] : item.isError ? ["err", "error"] : ["ok", "ok"];
     const name = document.createElement("span");
     name.className = "tname";
-    name.textContent = "⌘ " + (item.name || "tool");
+    name.textContent = item.name || "tool";
     const argument = document.createElement("span");
     argument.className = "targ";
     argument.textContent = toolArgSummary(item.input).slice(0, 160);
