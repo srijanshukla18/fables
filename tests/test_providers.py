@@ -530,6 +530,72 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(payload["usage"][0]["details_json"]["cached"], 1)
         self.assertNotIn("unrelated", json.dumps(payload))
 
+    def test_hermes_sqlite_metadata_and_bounded_archive(self):
+        db = self.home / ".hermes/state.db"
+        db.parent.mkdir(parents=True)
+        connection = sqlite3.connect(db)
+        connection.execute(
+            "CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT, model TEXT, "
+            "system_prompt TEXT, started_at REAL, ended_at REAL, message_count INTEGER, "
+            "tool_call_count INTEGER, input_tokens INTEGER, output_tokens INTEGER, "
+            "reasoning_tokens INTEGER, title TEXT, cwd TEXT, git_branch TEXT, "
+            "last_activity_at REAL, profile_name TEXT, hidden INTEGER DEFAULT 0)"
+        )
+        connection.execute(
+            "CREATE TABLE messages (id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, "
+            "content TEXT, tool_call_id TEXT, tool_calls TEXT, tool_name TEXT, "
+            "timestamp REAL, finish_reason TEXT, reasoning_content TEXT, "
+            "effect_disposition TEXT, active INTEGER DEFAULT 1, api_content TEXT)"
+        )
+        connection.execute("CREATE TABLE unrelated (secret TEXT)")
+        connection.execute(
+            "INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("20260831_fixture", "cli", "gpt-fixture", "must not escape",
+             100.0, 110.0, 4, 1, 20, 8, 2, "Hermes fixture",
+             str(self.home / "code/hermes"), "main", 111.0, "default", 0),
+        )
+        calls = json.dumps([{
+            "id": "call_fixture", "type": "function",
+            "function": {"name": "terminal", "arguments": "{\"command\":\"echo ok\"}"},
+        }])
+        connection.executemany(
+            "INSERT INTO messages (id, session_id, role, content, tool_call_id, "
+            "tool_calls, tool_name, timestamp, finish_reason, reasoning_content, "
+            "effect_disposition, active, api_content) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                (1, "20260831_fixture", "user", "Run it", None, None, None,
+                 100.0, None, None, None, 1, "must not escape"),
+                (2, "20260831_fixture", "assistant", "", None, calls, None,
+                 101.0, "tool_calls", "Use a tool", None, 1, None),
+                (3, "20260831_fixture", "tool", '{"output":"ok","exit_code":0}',
+                 "call_fixture", None, "terminal", 102.0, None, None, None, 1, None),
+                (4, "20260831_fixture", "assistant", "Done", None, None, None,
+                 103.0, "stop", None, None, 1, None),
+                (5, "20260831_fixture", "assistant", "rewound", None, None, None,
+                 104.0, "stop", None, None, 0, None),
+            ],
+        )
+        connection.execute("INSERT INTO unrelated VALUES ('must not escape')")
+        connection.commit()
+        connection.close()
+
+        result = providers.scan_hermes(self.home)
+        self.assertEqual(result.status["status"], "ok")
+        self.assertEqual(len(result.sessions), 1)
+        entry = result.sessions[0]
+        self.assertEqual(entry["source"], "hermes")
+        self.assertEqual(entry["format"], "hermes")
+        self.assertEqual(entry["title"], "Hermes fixture")
+        self.assertEqual(entry["project"], "~/code/hermes")
+        self.assertEqual(entry["native_id"], "20260831_fixture")
+        payload = json.loads(providers.load_target(result.targets[entry["id"]]))
+        self.assertTrue(payload["hermesArchive"])
+        self.assertEqual(len(payload["messages"]), 4)
+        self.assertNotIn("system_prompt", payload["session"])
+        serialized = json.dumps(payload)
+        self.assertNotIn("must not escape", serialized)
+        self.assertNotIn("rewound", serialized)
+
     def test_vscode_legacy_and_mutation_log_replay(self):
         root = (
             self.home / "Library/Application Support/Code/User/workspaceStorage"
@@ -854,6 +920,7 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual({item["source"] for item in statuses}, {
             "claude", "codex", "pi", "prime", "commandcode", "cowork", "copilot",
             "cline", "roo", "goose", "vscode", "gemini",
+            "hermes",
             "opencode", "cursor", "cursor-cli", "kimi",
             "amp", "qwen", "aider", "trae", "kiro", "kilo", "zed",
         })

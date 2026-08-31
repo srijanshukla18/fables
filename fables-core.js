@@ -1610,6 +1610,110 @@
     return finalize(meta, items, pending);
   }
 
+  function jsonValue(value) {
+    if (typeof value !== "string") return value;
+    const text = value.trim();
+    if (!text || !/^[\[{]/.test(text)) return value;
+    try {
+      return JSON.parse(text);
+    } catch (error) {
+      return value;
+    }
+  }
+
+  function parseHermes(rawText) {
+    const meta = baseMeta("hermes", "hermes");
+    const items = [];
+    const pending = new Map();
+    const data = parseDocument(rawText, meta, "Hermes");
+    if (!data) return finalize(meta, items, pending);
+    const session = data.session || {};
+    meta.title = session.title || "";
+    meta.cwd = session.cwd || session.git_repo_root || "";
+    meta.branch = session.git_branch || "";
+    meta.start = session.started_at || "";
+    meta.end = session.ended_at || session.last_activity_at || meta.start;
+    const sessionModel = modelString(session.model);
+    if (sessionModel) meta.models.add(sessionModel);
+    meta.tokens.input = Number(session.input_tokens) || 0;
+    meta.tokens.output = Number(session.output_tokens) || 0;
+    meta.tokens.reasoning = Number(session.reasoning_tokens) || 0;
+    meta.tokens.cacheRead = Number(session.cache_read_tokens) || 0;
+    meta.tokens.cacheWrite = Number(session.cache_write_tokens) || 0;
+    const run = { model: sessionModel };
+
+    for (const message of Array.isArray(data.messages) ? data.messages : []) {
+      const role = String(message.role || "");
+      const ts = message.timestamp || "";
+      touchTime(meta, ts);
+      const reasoning = message.reasoning_content || message.reasoning || "";
+      if (String(reasoning).trim()) {
+        items.push({
+          kind: "thinking", ts, text: outputText(jsonValue(reasoning)),
+          run, raw: [message],
+        });
+      }
+      if (!reasoning && message.reasoning_details) {
+        const details = outputText(jsonValue(message.reasoning_details));
+        if (details.trim()) {
+          items.push({ kind: "thinking", ts, text: details, run, raw: [message] });
+        }
+      }
+
+      const content = outputText(jsonValue(message.content || ""));
+      if (role === "user") {
+        if (content.trim()) {
+          if (!meta.title) meta.title = content.trim();
+          items.push({ kind: "user", ts, text: content, run, raw: [message] });
+        }
+      } else if (role === "assistant") {
+        if (content.trim()) {
+          items.push({ kind: "assistant", ts, text: content, run, raw: [message] });
+        }
+        const calls = jsonValue(message.tool_calls);
+        for (const call of Array.isArray(calls) ? calls : []) {
+          const fn = call && typeof call.function === "object" ? call.function : {};
+          const id = call && (call.id || call.call_id || call.tool_call_id);
+          const input = jsonValue(fn.arguments !== undefined ? fn.arguments : call.arguments);
+          const tool = {
+            kind: "tool", ts,
+            name: fn.name || call.name || message.tool_name || "tool",
+            input: input === undefined ? {} : input,
+            output: null,
+            isError: false,
+            run,
+            raw: [message],
+          };
+          if (id) pending.set(String(id), tool);
+          items.push(tool);
+        }
+      } else if (role === "tool") {
+        const id = String(message.tool_call_id || "");
+        const decoded = jsonValue(message.content || "");
+        const tool = pending.get(id);
+        const isError = message.effect_disposition === "error" ||
+          !!(decoded && typeof decoded === "object" && decoded.error) ||
+          !!(decoded && typeof decoded === "object" &&
+            Number(decoded.exit_code) !== 0 && decoded.exit_code !== undefined);
+        if (tool) {
+          tool.output = outputText(decoded);
+          tool.isError = isError;
+          tool.raw.push(message);
+          pending.delete(id);
+        } else {
+          items.push({
+            kind: "tool", ts, name: message.tool_name || "tool", input: {},
+            output: outputText(decoded), isError, run, raw: [message],
+          });
+          meta.diagnostics.orphanResults++;
+        }
+      } else if (content.trim()) {
+        items.push({ kind: "info", label: role || "message", ts, text: content, raw: [message] });
+      }
+    }
+    return finalize(meta, items, pending);
+  }
+
   function vscodeMessageText(value) {
     if (typeof value === "string") return value;
     if (!value || typeof value !== "object") return "";
@@ -1793,6 +1897,7 @@
       try {
         const value = JSON.parse(text);
         if (value && value.fablesVersion) return "archive";
+        if (value && value.hermesArchive && Array.isArray(value.messages)) return "hermes";
         if (value && Array.isArray(value.messages) && value.sessionId) return "gemini";
         if (value && value.kimiArchive && Array.isArray(value.messages)) return "kimi";
         if (value && value.session && Array.isArray(value.messages)) return "opencode";
@@ -1849,6 +1954,7 @@
     else if (format === "cursor") parsed = parseCursor(rawText);
     else if (format === "cline" || format === "roo") parsed = parseExtensionTask(rawText, format);
     else if (format === "goose") parsed = parseGoose(rawText);
+    else if (format === "hermes") parsed = parseHermes(rawText);
     else if (format === "vscode") parsed = parseVSCode(rawText);
     else parsed = parseClaude(rawText, source || (hint === "cowork" ? "cowork" : "claude"));
     if (source && format !== "archive") parsed.meta.source = source;
@@ -2007,10 +2113,62 @@
     };
   }
 
+  function makeLibraryArchive(entries, options) {
+    const sessions = [];
+    for (const entry of Array.isArray(entries) ? entries : []) {
+      if (!entry || !entry.parsed) continue;
+      const original = entry.session || {};
+      const archive = makeShareArchive(entry.parsed, options);
+      const meta = archive.meta || {};
+      const session = {
+        id: String(original.id || "session-" + (sessions.length + 1)),
+        source: meta.source || original.source || "archive",
+        format: "archive",
+        project: meta.cwd || redactText(original.project || "", options),
+        title: meta.title || redactText(original.title || "shared session", options),
+        mtime: original.mtime || meta.end || meta.start || "",
+        size: byteSize(JSON.stringify(archive)),
+      };
+      if (original.sub) session.sub = true;
+      if (original.experimental) session.experimental = true;
+      sessions.push({ session, archive });
+    }
+    return {
+      fablesLibraryVersion: 1,
+      exportedAt: new Date().toISOString(),
+      sessions,
+    };
+  }
+
+  function byteSize(value) {
+    if (typeof TextEncoder !== "undefined") return new TextEncoder().encode(value).length;
+    if (typeof Buffer !== "undefined") return Buffer.byteLength(value, "utf8");
+    return String(value).length;
+  }
+
+  function parseLibraryArchive(rawText) {
+    let data;
+    try {
+      data = typeof rawText === "string" ? JSON.parse(rawText) : rawText;
+    } catch (error) {
+      return null;
+    }
+    if (!data || data.fablesLibraryVersion !== 1 || !Array.isArray(data.sessions)) {
+      return null;
+    }
+    return {
+      ...data,
+      sessions: data.sessions.filter((entry) =>
+        entry && entry.session && entry.archive && Array.isArray(entry.archive.items)
+      ),
+    };
+  }
+
   return {
     detectFormat,
     inspectSensitive,
     itemSearchText,
+    makeLibraryArchive,
     makeShareArchive,
     outputText,
     parseArchive,
@@ -2022,7 +2180,9 @@
     parseExtensionTask,
     parseGemini,
     parseGoose,
+    parseHermes,
     parseKiro,
+    parseLibraryArchive,
     parseMessagesArchive,
     parseOpenCode,
     parseSession,

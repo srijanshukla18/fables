@@ -37,6 +37,10 @@ fi
 for file in \
     "$INSTALL_DIR/serve.py" \
     "$INSTALL_DIR/providers.py" \
+    "$INSTALL_DIR/fables-mcp.py" \
+    "$INSTALL_DIR/fables-mcp.ts" \
+    "$INSTALL_DIR/install-mcp.py" \
+    "$INSTALL_DIR/mcp_protocol.py" \
     "$INSTALL_DIR/index.html" \
     "$INSTALL_DIR/fables.css" \
     "$INSTALL_DIR/fables-core.js" \

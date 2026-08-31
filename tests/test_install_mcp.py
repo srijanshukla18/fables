@@ -96,6 +96,17 @@ class InstallMcpTests(unittest.TestCase):
         (pi_ext / "feature-end.ts").write_text("export default function x() {}\n",
                                                encoding="utf-8")
         write_json(home / ".prime/agent/settings.json", {"defaultModel": "gpt-5.6-luna"})
+        hermes = home / ".hermes/config.yaml"
+        hermes.parent.mkdir(parents=True)
+        hermes.write_text(
+            "model:\n  default: gpt-fixture\n\n"
+            "mcp_servers:\n"
+            "  context7:\n"
+            "    command: uvx\n"
+            "    args:\n"
+            "      - context7-mcp\n",
+            encoding="utf-8",
+        )
         write_json(home / ".qwen/settings.json", {"general": {}})
         (home / "Library/Application Support/Trae/User").mkdir(parents=True, exist_ok=True)
         write_json(home / ".config/zed/settings.json", {"theme": "dark"})
@@ -172,6 +183,12 @@ class InstallMcpTests(unittest.TestCase):
         self.assertTrue((skill / "src/fables/__init__.py").is_file())
         self.assertIn("127.0.0.1:8322/mcp",
                       (skill / "src/fables/__init__.py").read_text())
+        hermes = (self.home / ".hermes/config.yaml").read_text()
+        self.assertIn("mcp_servers:", hermes)
+        self.assertIn("  fables:", hermes)
+        self.assertIn(f"    command: \"{sys.executable}\"", hermes)
+        self.assertIn("  context7:", hermes)
+        self.assertIn("  default: gpt-fixture", hermes)
         self.assertIn("commandcode", result.stdout)
         self.assertIn("skipped", result.stdout)  # cmd CLI absent from test PATH
 
@@ -208,6 +225,8 @@ class InstallMcpTests(unittest.TestCase):
         self.assertEqual(gemini_text.count('"fables"'), 1)
         goose_text = (self.home / ".config/goose/config.yaml").read_text()
         self.assertEqual(goose_text.count("  fables:"), 1)
+        hermes_text = (self.home / ".hermes/config.yaml").read_text()
+        self.assertEqual(hermes_text.count("  fables:"), 1)
         # A third run must not change anything.
         before = {p: p.read_bytes() for p in
                   (self.home / ".codex/config.toml",
@@ -215,6 +234,7 @@ class InstallMcpTests(unittest.TestCase):
                    self.home / ".cursor/mcp.json",
                    self.home / ".config/opencode/opencode.jsonc",
                    self.home / ".config/goose/config.yaml",
+                   self.home / ".hermes/config.yaml",
                    self.home / ".claude.json")}
         run_installer(self.home)
         for path, content in before.items():
@@ -261,6 +281,10 @@ class InstallMcpTests(unittest.TestCase):
         self.assertFalse((self.home / ".prime/agent/skills/fables").exists())
         self.assertTrue(
             (self.home / ".prime/agent/skills/fables.fables.bak/SKILL.md").exists())
+        hermes = (self.home / ".hermes/config.yaml").read_text()
+        self.assertNotIn("  fables:", hermes)
+        self.assertIn("  context7:", hermes)
+        self.assertIn("  default: gpt-fixture", hermes)
         self.assertNotIn(SERVER_NAME, json.loads(
             (self.home / ".qwen/settings.json").read_text()).get("mcpServers", {}))
         self.assertNotIn(SERVER_NAME, json.loads(

@@ -1,0 +1,50 @@
+{
+  "hermesArchive": true,
+  "session": {
+    "id": "20260831_213053_fixture",
+    "source": "cli",
+    "model": "gpt-fixture",
+    "started_at": 1788192062.2,
+    "ended_at": 1788192106.6,
+    "message_count": 4,
+    "tool_call_count": 1,
+    "input_tokens": 20,
+    "output_tokens": 8,
+    "reasoning_tokens": 2,
+    "title": "Fixture Hermes session",
+    "cwd": "/Users/example/code/hermes",
+    "git_branch": "main"
+  },
+  "messages": [
+    {
+      "id": 1,
+      "role": "user",
+      "content": "Run the fixture tool.",
+      "timestamp": 1788192062.1
+    },
+    {
+      "id": 2,
+      "role": "assistant",
+      "content": "",
+      "tool_calls": "[{\"id\":\"call_fixture\",\"type\":\"function\",\"function\":{\"name\":\"terminal\",\"arguments\":\"{\\\"command\\\":\\\"printf fixture\\\"}\"}}]",
+      "reasoning_content": "A tool is appropriate.",
+      "timestamp": 1788192066.8,
+      "finish_reason": "tool_calls"
+    },
+    {
+      "id": 3,
+      "role": "tool",
+      "content": "{\"output\":\"fixture output\",\"exit_code\":0,\"error\":null}",
+      "tool_call_id": "call_fixture",
+      "tool_name": "terminal",
+      "timestamp": 1788192067.3
+    },
+    {
+      "id": 4,
+      "role": "assistant",
+      "content": "Fixture complete.",
+      "timestamp": 1788192070.1,
+      "finish_reason": "stop"
+    }
+  ]
+}

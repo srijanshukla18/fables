@@ -84,6 +84,7 @@ Use `python3 serve.py 3000` to choose another port.
 | Cline | `~/.cline/data/tasks/*` and editor extension storage | Stable |
 | Roo Code | VS Code, Cursor, and Windsurf extension storage | Stable |
 | Goose | `~/Library/Application Support/Block/goose/sessions/sessions.db` or its Linux equivalent | Stable |
+| Hermes Agent | `~/.hermes/state.db` plus profile databases | Stable |
 | VS Code Chat | workspace, empty-window, and transferred chat sessions | Stable |
 | Claude Cowork | legacy local-agent sandboxes | Experimental |
 | GitHub Copilot CLI | `~/.copilot/session-state/*/events.jsonl` | Stable |
@@ -133,7 +134,7 @@ The installer registers fables-mcp (launched via `uv run`) with every
 MCP-capable agent Fables reads: Codex CLI, Claude Code, Gemini CLI, Cursor,
 OpenCode, Cline, Roo Code, VS Code Chat, Goose, Copilot CLI, Command Code
 (`cmd mcp add`), Amp (`amp mcp add`), Qwen Code, Trae, Kiro, Kilo Code, Zed,
-Prime Agent (HTTP endpoint + kernel skill, since its kernel only wires HTTP
+Hermes Agent, Prime Agent (HTTP endpoint + kernel skill, since its kernel only wires HTTP
 MCP servers), and pi (as a pi extension bridge, since pi has no built-in MCP
 client). Aider is read but not registered — it has no native MCP client
 support. Each target is idempotent and gets a one-shot
@@ -206,6 +207,12 @@ reading room stays responsive.
 
 Choose **share as html** to review and download a single offline HTML file.
 Exports contain a normalized Fables archive, not the original transcript.
+
+Choose **export all** in the library to create a ZIP with `manifest.json` and
+one UTF-8 `.jsonl` file per discovered session. Each JSONL file starts with a
+versioned session metadata record followed by one normalized passage per line.
+Sessions are processed independently, and the export uses the same privacy
+review and redaction choices as a single-session export.
 
 Reasoning, system context, and raw records are excluded by default. Before
 exporting, Fables scans for likely credentials, local paths, and email

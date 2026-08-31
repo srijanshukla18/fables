@@ -166,6 +166,26 @@ test("Cline, Goose, and VS Code preserve messages, tools, and metadata", () => {
   assert.equal(vscode.meta.tokens.reasoning, 2);
 });
 
+test("Hermes SQLite archives preserve messages, reasoning, tools, and metadata", () => {
+  const parsed = Core.parseSession(read("hermes.json"), "hermes", "hermes");
+  assert.equal(parsed.meta.source, "hermes");
+  assert.equal(parsed.meta.title, "Fixture Hermes session");
+  assert.equal(parsed.meta.cwd, "/Users/example/code/hermes");
+  assert.equal(parsed.meta.branch, "main");
+  assert.deepEqual([...parsed.meta.models], ["gpt-fixture"]);
+  assert.equal(parsed.meta.tokens.input, 20);
+  assert.equal(parsed.meta.tokens.reasoning, 2);
+  assert.ok(parsed.items.some((item) => item.kind === "thinking" &&
+    item.text === "A tool is appropriate."));
+  const tool = parsed.items.find((item) => item.kind === "tool");
+  assert.equal(tool.name, "terminal");
+  assert.deepEqual(tool.input, { command: "printf fixture" });
+  assert.equal(tool.output, "fixture output");
+  assert.equal(tool.isError, false);
+  assert.equal(parsed.meta.diagnostics.orphanCalls, 0);
+  assert.equal(parsed.meta.diagnostics.orphanResults, 0);
+});
+
 test("standalone archives exclude hidden categories and redact sensitive text", () => {
   const parsed = Core.parseSession(read("claude.jsonl"), "claude", "claude");
   parsed.items.push({
@@ -198,4 +218,31 @@ test("standalone archives exclude hidden categories and redact sensitive text", 
   const roundTrip = Core.parseArchive(serialized);
   assert.equal(roundTrip.meta.source, "claude");
   assert.equal(roundTrip.items.length, archive.items.length);
+});
+
+test("all-session exports round-trip as one standalone library", () => {
+  const claude = Core.parseSession(read("claude.jsonl"), "claude", "claude");
+  const hermes = Core.parseSession(read("hermes.json"), "hermes", "hermes");
+  const library = Core.makeLibraryArchive([
+    {
+      session: { id: "aaaaaaaaaaaa", source: "claude", title: "Claude fixture",
+        project: "/Users/example/code/claude", mtime: 1 },
+      parsed: claude,
+    },
+    {
+      session: { id: "bbbbbbbbbbbb", source: "hermes", title: "Hermes fixture",
+        project: "/Users/example/code/hermes", mtime: 2 },
+      parsed: hermes,
+    },
+  ], { redactPaths: true });
+  assert.equal(library.fablesLibraryVersion, 1);
+  assert.equal(library.sessions.length, 2);
+  assert.equal(library.sessions[1].session.source, "hermes");
+  assert.ok(!JSON.stringify(library).includes("/Users/example"));
+
+  const roundTrip = Core.parseLibraryArchive(JSON.stringify(library));
+  assert.equal(roundTrip.sessions.length, 2);
+  const parsed = Core.parseArchive(roundTrip.sessions[1].archive);
+  assert.equal(parsed.meta.source, "hermes");
+  assert.ok(parsed.items.some((item) => item.kind === "tool"));
 });

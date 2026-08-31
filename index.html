@@ -22,6 +22,12 @@
         autocomplete="off"
       >
       <div class="chips" id="sourceChips" aria-label="Filter by source"></div>
+      <button
+        class="exportall"
+        id="exportAllBtn"
+        title="Review and export every session as JSONL files in one ZIP archive"
+        disabled
+      >export all</button>
     </div>
     <div class="providerstatus" id="providerStatus"></div>
     <nav class="shelf" id="shelf" aria-label="Coding sessions"></nav>
@@ -88,7 +94,7 @@
   <dialog id="shareDialog" aria-labelledby="shareTitle">
     <div class="sharedialog">
       <h3 id="shareTitle">Review standalone export</h3>
-      <p class="intro">
+      <p class="intro" id="shareIntro">
         Exports contain only the selected normalized passages. Hidden raw source
         records are excluded unless explicitly enabled.
       </p>

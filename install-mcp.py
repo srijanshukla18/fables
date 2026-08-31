@@ -24,6 +24,7 @@ Targets (each idempotent, with one-shot ``<file>.fables.bak`` backups):
     kilo       ~/.config/kilo/kilo.jsonc (mcp key) + legacy extension storage
     zed        ~/.config/zed/settings.json (context_servers)
     prime     ~/.prime/agent/settings.json (HTTP endpoint + kernel skill)
+    hermes    ~/.hermes/config.yaml                      mcp_servers.fables
     pi        ~/.pi/agent/extensions/fables-mcp.ts + fables-mcp.json
 
 The server is launched through ``uv run`` when uv is available (it manages
@@ -169,12 +170,13 @@ def toml_remove(path: Path) -> str:
     return "removed"
 
 
-def yaml_install(path: Path, name: str, block: str) -> str:
+def yaml_install(path: Path, name: str, block: str, root: str = "extensions") -> str:
     lines = read_text(path).splitlines()
     index = next((i for i, line in enumerate(lines)
-                  if re.match(r"^extensions:\s*$", line)), None)
-    indent = block.splitlines()[0]
+                  if re.match(rf"^{re.escape(root)}:\s*(?:\{{\}}|null)?\s*$", line)), None)
     if index is not None:
+        if lines[index].strip() != f"{root}:":
+            lines[index] = f"{root}:"
         for line in lines[index + 1:]:
             if not line.strip():
                 continue
@@ -185,22 +187,20 @@ def yaml_install(path: Path, name: str, block: str) -> str:
         backup(path)
         lines.insert(index + 1, block)
     else:
-        if any(re.match(rf"^  {name}:", line) for line in lines):
-            return "exists"
         backup(path)
         if lines and lines[-1].strip():
             lines.append("")
-        lines.append("extensions:")
+        lines.append(f"{root}:")
         lines.append(block)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return "ok"
 
 
-def yaml_remove(path: Path, name: str) -> str:
+def yaml_remove(path: Path, name: str, root: str = "extensions") -> str:
     lines = read_text(path).splitlines()
     index = next((i for i, line in enumerate(lines)
-                  if re.match(r"^extensions:\s*$", line)), None)
+                  if re.match(rf"^{re.escape(root)}:\s*$", line)), None)
     if index is None:
         return "absent"
     start = next((i for i in range(index + 1, len(lines))
@@ -216,7 +216,16 @@ def yaml_remove(path: Path, name: str) -> str:
             break
     backup(path)
     remaining = lines[:start] + lines[end:]
-    if not any(line.startswith("  ") and line.strip() for line in remaining[index:]):
+    root_end = index + 1
+    while root_end < len(remaining):
+        line = remaining[root_end]
+        if line.strip() and not line.startswith(" "):
+            break
+        root_end += 1
+    if not any(
+        line.startswith("  ") and line.strip()
+        for line in remaining[index + 1:root_end]
+    ):
         remaining = remaining[:index] + remaining[index + 1:]
     while remaining and not remaining[-1].strip():
         remaining.pop()
@@ -524,6 +533,39 @@ def agent_goose(home: Path, server: tuple[str, list[str]], mode: str) -> tuple[s
     return status, str(paths[0])
 
 
+def hermes_block(command: str, argv: list[str]) -> str:
+    lines = ["  fables:", f"    command: {_q(command)}", "    args:"]
+    for item in argv:
+        lines.append(f"      - {_q(item)}")
+    lines.append("    enabled: true")
+    return "\n".join(lines)
+
+
+def agent_hermes(home: Path, server: tuple[str, list[str]], mode: str) -> tuple[str, str]:
+    path = home / ".hermes" / "config.yaml"
+    if not path.exists() and mode != "remove" and shutil.which("hermes") is None:
+        return "skipped", "Hermes Agent not found"
+    if mode == "check":
+        registered = False
+        lines = read_text(path).splitlines()
+        root = next((i for i, line in enumerate(lines)
+                     if re.match(r"^mcp_servers:\s*$", line)), None)
+        if root is not None:
+            for line in lines[root + 1:]:
+                if line.strip() and not line.startswith(" "):
+                    break
+                if line == "  fables:":
+                    registered = True
+                    break
+        return ("registered" if registered else "not registered", str(path))
+    if mode == "remove":
+        return yaml_remove(path, SERVER_NAME, "mcp_servers"), str(path)
+    command, argv = server
+    return yaml_install(
+        path, SERVER_NAME, hermes_block(command, argv), "mcp_servers",
+    ), str(path)
+
+
 def copilot_status(path: Path) -> bool:
     return "fables" in read_text(path)
 
@@ -812,6 +854,7 @@ AGENTS = [
     ("kilo", agent_kilo, "Kilo Code"),
     ("zed", agent_zed, "Zed"),
     ("prime", agent_prime, "Prime Agent"),
+    ("hermes", agent_hermes, "Hermes Agent"),
     ("pi", agent_pi, "pi (extension bridge)"),
 ]
 

@@ -84,9 +84,10 @@ button {
   background: var(--panel);
 }
 
-body.standalone .sidebar,
-body.standalone .shelftoggle,
-body.standalone .shelfbackdrop {
+body.standalone:not(.library-standalone) .sidebar,
+body.standalone:not(.library-standalone) .shelftoggle,
+body.standalone:not(.library-standalone) .shelfbackdrop,
+body.standalone .exportall {
   display: none;
 }
 
@@ -168,6 +169,27 @@ body.standalone .shelfbackdrop {
   border-color: var(--amber-dim);
   background: rgba(227, 179, 65, 0.07);
   color: var(--amber);
+}
+
+.exportall {
+  align-self: flex-start;
+  padding: 5px 10px;
+  border: 1px solid var(--amber-dim);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--amber);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.4px;
+}
+
+.exportall:hover:not(:disabled) {
+  background: rgba(227, 179, 65, 0.1);
+}
+
+.exportall:disabled {
+  cursor: default;
+  opacity: 0.45;
 }
 
 .providerstatus {
@@ -260,6 +282,7 @@ body.standalone .shelfbackdrop {
 .source-cline { --source-color: #ef8d68; }
 .source-roo { --source-color: #be92ef; }
 .source-goose { --source-color: #e2c66f; }
+.source-hermes { --source-color: #f0a45d; }
 .source-vscode { --source-color: #69a9e8; }
 
 .card .proj {
@@ -1029,7 +1052,8 @@ dialog::backdrop {
     transform: translateX(0);
   }
 
-  body:not(.standalone) .shelftoggle {
+  body:not(.standalone) .shelftoggle,
+  body.library-standalone .shelftoggle {
     display: block;
   }
 

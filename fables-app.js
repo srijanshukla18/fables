@@ -6,7 +6,7 @@ const CHUNK = 150;
 const PRE_CAP = 15000;
 const SOURCE_ORDER = [
   "claude", "cowork", "codex", "copilot", "vscode", "cursor",
-  "gemini", "opencode", "continue", "cline", "roo", "goose",
+  "gemini", "opencode", "continue", "cline", "roo", "goose", "hermes",
 ];
 const SOURCE_META = {
   claude: { label: "Claude Code" },
@@ -20,6 +20,7 @@ const SOURCE_META = {
   cline: { label: "Cline" },
   roo: { label: "Roo Code" },
   goose: { label: "Goose" },
+  hermes: { label: "Hermes Agent" },
   vscode: { label: "VS Code Chat" },
 };
 
@@ -39,6 +40,12 @@ const state = {
   requestController: null,
   requestSerial: 0,
   searchTimer: null,
+  embeddedSessions: new Map(),
+  exportMode: "session",
+  exportEntries: [],
+  exportFailures: [],
+  exportStats: null,
+  exportPreview: [],
 };
 
 function esc(value) {
@@ -763,21 +770,29 @@ async function openSession(session, options) {
   $("shareBtn").disabled = true;
   setLoading("Opening " + session.title + "…");
   try {
-    const response = await fetch("/api/session/" + session.id, {
-      signal: controller.signal,
-    });
-    if (!response.ok) throw new Error("HTTP " + response.status);
-    const raw = await responseText(response, (received, total) => {
-      setLoading("Reading " + fmtBytes(received) +
-        (total ? " of " + fmtBytes(total) : "") + "…");
-    });
-    if (serial !== state.requestSerial) return;
-    setLoading("Parsing " + sourceLabel(session.source) + " session…");
-    const parsed = normalizeParsed(await parseOffThread(
-      raw,
-      session.format || session.source,
-      session.source
-    ));
+    const embeddedArchive = state.embeddedSessions.get(session.id);
+    let raw;
+    let parsed;
+    if (embeddedArchive) {
+      raw = JSON.stringify(embeddedArchive);
+      parsed = normalizeParsed(Core.parseArchive(embeddedArchive));
+    } else {
+      const response = await fetch("/api/session/" + session.id, {
+        signal: controller.signal,
+      });
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      raw = await responseText(response, (received, total) => {
+        setLoading("Reading " + fmtBytes(received) +
+          (total ? " of " + fmtBytes(total) : "") + "…");
+      });
+      if (serial !== state.requestSerial) return;
+      setLoading("Parsing " + sourceLabel(session.source) + " session…");
+      parsed = normalizeParsed(await parseOffThread(
+        raw,
+        session.format || session.source,
+        session.source
+      ));
+    }
     if (serial !== state.requestSerial) return;
     state.raw = raw;
     state.current = session;
@@ -961,28 +976,54 @@ function shareArchive() {
 }
 
 function sharePreview(archive) {
-  const lines = archive.items.slice(0, 8).map((item) => {
+  const previewItems = [];
+  if (archive.fablesLibraryVersion) {
+    for (const entry of archive.sessions || []) {
+      previewItems.push({ kind: "session", text: entry.session.title });
+      previewItems.push(...(entry.archive.items || []).slice(0, 2));
+      if (previewItems.length >= 10) break;
+    }
+  } else {
+    previewItems.push(...(archive.items || []).slice(0, 8));
+  }
+  const lines = previewItems.slice(0, 10).map((item) => {
+    if (item.kind === "session") return "\n[session] " + item.text;
     if (item.kind === "tool") {
       return "[tool] " + item.name + " " + toolArgSummary(item.input).slice(0, 100);
     }
     return "[" + item.kind + "] " + String(item.text || "").replace(/\s+/g, " ").slice(0, 180);
   });
-  if (archive.items.length > 8) lines.push("… " + (archive.items.length - 8) + " more passages");
+  if (!archive.fablesLibraryVersion && archive.items.length > 8) {
+    lines.push("… " + (archive.items.length - 8) + " more passages");
+  }
   $("sharePreview").textContent = lines.join("\n") || "(nothing selected)";
 }
 
 function updateShareReview() {
-  if (!state.parsed) return;
+  if (state.exportMode === "session" && !state.parsed) return;
+  if (state.exportMode === "all") {
+    const stats = state.exportStats || { sessions: 0, passages: 0, sourceBytes: 0 };
+    $("shareEstimate").textContent = stats.sessions + " sessions · " +
+      stats.passages + " passages · " + fmtBytes(stats.sourceBytes) + " source data";
+    $("sharePreview").textContent = state.exportPreview.join("\n") || "(nothing selected)";
+    return;
+  }
   const archive = shareArchive();
   const bytes = new Blob([JSON.stringify(archive)]).size;
-  $("shareEstimate").textContent =
-    archive.items.length + " passages · about " + fmtBytes(bytes) + " standalone";
+  if (archive.fablesLibraryVersion) {
+    const passages = archive.sessions.reduce(
+      (total, entry) => total + entry.archive.items.length, 0
+    );
+    $("shareEstimate").textContent = archive.sessions.length + " sessions · " +
+      passages + " passages · about " + fmtBytes(bytes) + " standalone";
+  } else {
+    $("shareEstimate").textContent =
+      archive.items.length + " passages · about " + fmtBytes(bytes) + " standalone";
+  }
   sharePreview(archive);
 }
 
-function openShareReview() {
-  if (!state.parsed) return;
-  const findings = Core.inspectSensitive(state.parsed);
+function showShareFindings(findings) {
   const parts = [];
   if (findings.secrets) parts.push(findings.secrets + " likely secrets");
   if (findings.paths) parts.push(findings.paths + " local paths");
@@ -992,8 +1033,93 @@ function openShareReview() {
     "Pattern scan found " + parts.join(", ") + ". Review the preview; detection is best-effort." :
     "Pattern scan found no obvious secrets. Detection is best-effort.";
   node.classList.toggle("warn", parts.length > 0);
+}
+
+function openShareReview() {
+  if (!state.parsed) return;
+  state.exportMode = "session";
+  state.exportEntries = [];
+  state.exportFailures = [];
+  $("shareTitle").textContent = "Review standalone export";
+  $("shareIntro").textContent =
+    "Exports contain only the selected normalized passages. Hidden raw source " +
+    "records are excluded unless explicitly enabled.";
+  $("exportBtn").textContent = "download standalone html";
+  showShareFindings(Core.inspectSensitive(state.parsed));
   updateShareReview();
   $("shareDialog").showModal();
+}
+
+async function loadSessionForExport(session) {
+  if (state.current && state.current.id === session.id && state.parsed) {
+    return { session, parsed: state.parsed };
+  }
+  const response = await fetch("/api/session/" + session.id);
+  if (!response.ok) throw new Error("HTTP " + response.status);
+  const raw = await response.text();
+  const parsed = normalizeParsed(await parseOffThread(
+    raw, session.format || session.source, session.source
+  ));
+  if (!parsed.meta.title) parsed.meta.title = session.title;
+  if (!parsed.meta.cwd) parsed.meta.cwd = session.project || "";
+  return { session, parsed };
+}
+
+async function openExportAllReview() {
+  if (!state.sessions.length || document.body.classList.contains("standalone")) return;
+  const button = $("exportAllBtn");
+  button.disabled = true;
+  state.exportMode = "all";
+  state.exportEntries = [];
+  state.exportFailures = [];
+  state.exportStats = { sessions: 0, passages: 0, sourceBytes: 0 };
+  state.exportPreview = [];
+  try {
+    const findings = { secrets: 0, paths: 0, emails: 0 };
+    for (let index = 0; index < state.sessions.length; index++) {
+      const session = state.sessions[index];
+      button.textContent = "preparing " + (index + 1) + "/" + state.sessions.length;
+      setLive("Preparing export " + (index + 1) + " of " + state.sessions.length + "…");
+      try {
+        const entry = await loadSessionForExport(session);
+        const found = Core.inspectSensitive(entry.parsed);
+        findings.secrets += found.secrets;
+        findings.paths += found.paths;
+        findings.emails += found.emails;
+        state.exportEntries.push({ session });
+        state.exportStats.sessions++;
+        state.exportStats.passages += entry.parsed.items.length;
+        state.exportStats.sourceBytes += Number(session.size) || 0;
+        if (state.exportPreview.length < 10) {
+          state.exportPreview.push("\n[session] " + session.title);
+          for (const item of entry.parsed.items.slice(0, 2)) {
+            if (state.exportPreview.length >= 10) break;
+            state.exportPreview.push("[" + item.kind + "] " +
+              String(item.text || "").replace(/\s+/g, " ").slice(0, 180));
+          }
+        }
+      } catch (error) {
+        state.exportFailures.push({ session, error: error.message });
+      }
+    }
+    if (!state.exportEntries.length) throw new Error("no sessions could be loaded");
+    $("shareTitle").textContent = "Review all-sessions export";
+    $("shareIntro").textContent =
+      "This creates one ZIP containing a manifest and one JSONL file per discovered session. " +
+      "Each line is a normalized record using the privacy choices below; hidden raw records " +
+      "remain excluded unless explicitly enabled." + (state.exportFailures.length ?
+        " " + state.exportFailures.length + " session(s) could not be loaded and will be omitted." : "");
+    $("exportBtn").textContent = "download all as zip";
+    showShareFindings(findings);
+    updateShareReview();
+    $("shareDialog").showModal();
+  } catch (error) {
+    window.alert("Export preparation failed: " + error.message);
+  } finally {
+    button.disabled = false;
+    button.textContent = "export all";
+    setLive("");
+  }
 }
 
 async function fetchAsset(path) {
@@ -1006,32 +1132,235 @@ function safeScriptSource(source) {
   return String(source).replace(/<\/script/gi, "<\\/script");
 }
 
+function standaloneTemplate(page, css, core, app) {
+  const csp = '<meta http-equiv="Content-Security-Policy" content="' +
+    "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline' blob:; " +
+    "worker-src blob:; img-src data:; object-src 'none'; base-uri 'none'" +
+    '">';
+  const output = page
+    .replace('<link rel="stylesheet" href="/fables.css">', "<style>" + css + "</style>")
+    .replace('<script src="/fables-core.js"></script>',
+      "<script>" + safeScriptSource(core) + "</scr" + "ipt>")
+    .replace('<script src="/fables-app.js"></script>',
+      "<script>" + safeScriptSource(app) + "</scr" + "ipt>")
+    .replace("</head>", csp + "</head>");
+  const bodyEnd = output.lastIndexOf("</body>");
+  if (bodyEnd < 0) throw new Error("page template has no closing body tag");
+  return [output.slice(0, bodyEnd), output.slice(bodyEnd)];
+}
+
+const CRC_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let index = 0; index < 256; index++) {
+    let value = index;
+    for (let bit = 0; bit < 8; bit++) {
+      value = (value & 1) ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+    }
+    table[index] = value >>> 0;
+  }
+  return table;
+})();
+
+function crc32(bytes) {
+  let value = 0xffffffff;
+  for (const byte of bytes) value = CRC_TABLE[(value ^ byte) & 0xff] ^ (value >>> 8);
+  return (value ^ 0xffffffff) >>> 0;
+}
+
+function zipHeader(size) {
+  const bytes = new Uint8Array(size);
+  return { bytes, view: new DataView(bytes.buffer) };
+}
+
+function zipDate(value) {
+  const date = new Date(dateValue(value));
+  const safe = Number.isNaN(date.getTime()) ? new Date() : date;
+  const year = Math.max(1980, safe.getFullYear());
+  return {
+    time: (safe.getHours() << 11) | (safe.getMinutes() << 5) | (safe.getSeconds() >> 1),
+    date: ((year - 1980) << 9) | ((safe.getMonth() + 1) << 5) | safe.getDate(),
+  };
+}
+
+async function deflateRaw(bytes) {
+  if (!window.CompressionStream) return { method: 0, bytes };
+  try {
+    const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream("deflate-raw"));
+    return { method: 8, bytes: new Uint8Array(await new Response(stream).arrayBuffer()) };
+  } catch (error) {
+    return { method: 0, bytes };
+  }
+}
+
+class ZipWriter {
+  constructor(writable) {
+    this.writable = writable;
+    this.parts = writable ? null : [];
+    this.entries = [];
+    this.offset = 0;
+  }
+
+  async write(bytes) {
+    if (this.offset + bytes.byteLength > 0xffffffff) {
+      throw new Error("export exceeds the 4 GB ZIP limit");
+    }
+    if (this.writable) await this.writable.write(bytes);
+    else this.parts.push(bytes);
+    this.offset += bytes.byteLength;
+  }
+
+  async add(name, bytes, modified) {
+    const filename = new TextEncoder().encode(name);
+    const compressed = await deflateRaw(bytes);
+    const stamp = zipDate(modified);
+    const checksum = crc32(bytes);
+    const offset = this.offset;
+    const header = zipHeader(30);
+    header.view.setUint32(0, 0x04034b50, true);
+    header.view.setUint16(4, 20, true);
+    header.view.setUint16(6, 0x0800, true);
+    header.view.setUint16(8, compressed.method, true);
+    header.view.setUint16(10, stamp.time, true);
+    header.view.setUint16(12, stamp.date, true);
+    header.view.setUint32(14, checksum, true);
+    header.view.setUint32(18, compressed.bytes.byteLength, true);
+    header.view.setUint32(22, bytes.byteLength, true);
+    header.view.setUint16(26, filename.byteLength, true);
+    await this.write(header.bytes);
+    await this.write(filename);
+    await this.write(compressed.bytes);
+    this.entries.push({
+      filename, method: compressed.method, stamp, checksum, offset,
+      compressedSize: compressed.bytes.byteLength, size: bytes.byteLength,
+    });
+  }
+
+  async close() {
+    const centralOffset = this.offset;
+    for (const entry of this.entries) {
+      const header = zipHeader(46);
+      header.view.setUint32(0, 0x02014b50, true);
+      header.view.setUint16(4, 0x0314, true);
+      header.view.setUint16(6, 20, true);
+      header.view.setUint16(8, 0x0800, true);
+      header.view.setUint16(10, entry.method, true);
+      header.view.setUint16(12, entry.stamp.time, true);
+      header.view.setUint16(14, entry.stamp.date, true);
+      header.view.setUint32(16, entry.checksum, true);
+      header.view.setUint32(20, entry.compressedSize, true);
+      header.view.setUint32(24, entry.size, true);
+      header.view.setUint16(28, entry.filename.byteLength, true);
+      header.view.setUint32(42, entry.offset, true);
+      await this.write(header.bytes);
+      await this.write(entry.filename);
+    }
+    const centralSize = this.offset - centralOffset;
+    const end = zipHeader(22);
+    end.view.setUint32(0, 0x06054b50, true);
+    end.view.setUint16(8, this.entries.length, true);
+    end.view.setUint16(10, this.entries.length, true);
+    end.view.setUint32(12, centralSize, true);
+    end.view.setUint32(16, centralOffset, true);
+    await this.write(end.bytes);
+    if (this.writable) await this.writable.close();
+    return this.parts ? new Blob(this.parts, { type: "application/zip" }) : null;
+  }
+}
+
+function sessionJsonl(session, parsed, options) {
+  const archive = Core.makeShareArchive(parsed, options);
+  const metadata = {
+    type: "session",
+    schema: "fables.session.jsonl",
+    version: 1,
+    session: {
+      id: session.id,
+      source: session.source,
+      title: archive.meta.title || session.title,
+      project: archive.meta.cwd || "",
+      mtime: session.mtime,
+    },
+    meta: archive.meta,
+  };
+  const lines = [JSON.stringify(metadata)];
+  for (let index = 0; index < archive.items.length; index++) {
+    lines.push(JSON.stringify({ type: "item", index, ...archive.items[index] }));
+  }
+  return new TextEncoder().encode(lines.join("\n") + "\n");
+}
+
+async function exportAllZip(button, pickerPromise) {
+  const writable = pickerPromise ? await (await pickerPromise).createWritable() : null;
+  const zip = new ZipWriter(writable);
+  const manifest = [];
+  const failures = [];
+  try {
+    for (let index = 0; index < state.exportEntries.length; index++) {
+      const session = state.exportEntries[index].session;
+      button.textContent = "writing " + (index + 1) + "/" + state.exportEntries.length;
+      setLive("Writing export " + (index + 1) + " of " + state.exportEntries.length + "…");
+      try {
+        const loaded = await loadSessionForExport(session);
+        const filename = "sessions/" + session.id + "-" + slug(session.title) + ".jsonl";
+        const bytes = sessionJsonl(session, loaded.parsed, shareOptions());
+        await zip.add(filename, bytes, session.mtime);
+        manifest.push({ ...session, file: filename });
+      } catch (error) {
+        failures.push({ id: session.id, title: session.title, error: error.message });
+      }
+    }
+    if (!manifest.length) throw new Error("no sessions could be written");
+    const manifestBytes = new TextEncoder().encode(JSON.stringify({
+      fablesExportVersion: 1,
+      format: "fables.session.jsonl",
+      exportedAt: new Date().toISOString(),
+      sessions: manifest,
+      failures,
+    }, null, 2) + "\n");
+    await zip.add("manifest.json", manifestBytes, Date.now());
+    const blob = await zip.close();
+    if (blob) {
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = "fables-all-sessions.zip";
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(link.href), 5000);
+    }
+    state.exportFailures.push(...failures);
+  } catch (error) {
+    if (writable) await writable.abort().catch(() => {});
+    throw error;
+  }
+}
+
 async function exportStandalone() {
   const button = $("exportBtn");
+  const pickerPromise = state.exportMode === "all" && window.showSaveFilePicker ?
+    window.showSaveFilePicker({
+      suggestedName: "fables-all-sessions.zip",
+      types: [{ description: "ZIP archive", accept: { "application/zip": [".zip"] } }],
+    }) : null;
   button.disabled = true;
   button.textContent = "binding…";
   try {
-    const archiveJson = JSON.stringify(shareArchive()).replace(/</g, "\\u003c");
-    const [page, css, core, app] = await Promise.all([
+    if (state.exportMode === "all") {
+      await exportAllZip(button, pickerPromise);
+      $("shareDialog").close();
+      setLive("Session archive exported.");
+      return;
+    }
+    const assets = await Promise.all([
       fetchAsset("/"),
       fetchAsset("/fables.css"),
       fetchAsset("/fables-core.js"),
       fetchAsset("/fables-app.js"),
     ]);
-    const csp = '<meta http-equiv="Content-Security-Policy" content="' +
-      "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline' blob:; " +
-      "worker-src blob:; img-src data:; object-src 'none'; base-uri 'none'" +
-      '">';
-    let output = page
-      .replace('<link rel="stylesheet" href="/fables.css">', "<style>" + css + "</style>")
-      .replace('<script src="/fables-core.js"></script>',
-        "<script>" + safeScriptSource(core) + "</scr" + "ipt>")
-      .replace('<script src="/fables-app.js"></script>',
-        "<script>" + safeScriptSource(app) + "</scr" + "ipt>")
-      .replace("</head>", csp + "</head>");
+    const archive = shareArchive();
+    const archiveJson = JSON.stringify(archive).replace(/</g, "\\u003c");
+    const [prefix, suffix] = standaloneTemplate(...assets);
     const embedded = '\n<script type="application/json" id="embedded-data">' +
       archiveJson + "</scr" + "ipt>\n";
-    output = output.replace("</body>", () => embedded + "</body>");
+    const output = prefix + embedded + suffix;
     const blob = new Blob([output], { type: "text/html" });
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
@@ -1044,7 +1373,8 @@ async function exportStandalone() {
     window.alert("Export failed: " + error.message);
   } finally {
     button.disabled = false;
-    button.textContent = "download standalone html";
+    button.textContent = state.exportMode === "all" ?
+      "download all as zip" : "download standalone html";
   }
 }
 
@@ -1114,6 +1444,28 @@ async function boot() {
   const embedded = $("embedded-data");
   if (embedded) {
     document.body.classList.add("standalone");
+    const library = Core.parseLibraryArchive(embedded.textContent);
+    if (library) {
+      document.body.classList.add("library-standalone");
+      state.sessions = library.sessions.map((entry) => entry.session);
+      state.embeddedSessions = new Map(
+        library.sessions.map((entry) => [entry.session.id, entry.archive])
+      );
+      const counts = new Map();
+      for (const session of state.sessions) {
+        counts.set(session.source, (counts.get(session.source) || 0) + 1);
+      }
+      state.providers = [...counts].map(([source, count]) => ({
+        source, count, status: "ok",
+      }));
+      renderSourceChips();
+      renderProviderStatus();
+      renderShelf();
+      const requested = routeSession();
+      if (requested) await openSession(requested, { history: null });
+      else showWelcome();
+      return;
+    }
     state.raw = embedded.textContent;
     state.current = {
       id: "embedded",
@@ -1144,6 +1496,7 @@ async function boot() {
   renderSourceChips();
   renderProviderStatus();
   renderShelf();
+  $("exportAllBtn").disabled = !state.sessions.length;
   setLoading("");
   const requested = routeSession();
   if (requested) await openSession(requested, { history: null });
@@ -1152,6 +1505,7 @@ async function boot() {
 $("finder").addEventListener("input", renderShelf);
 $("insearch").addEventListener("input", handleSearchInput);
 $("shareBtn").addEventListener("click", openShareReview);
+$("exportAllBtn").addEventListener("click", openExportAllReview);
 $("shelftoggle").addEventListener("click", toggleShelf);
 $("shelfbackdrop").addEventListener("click", closeShelf);
 $("exportBtn").addEventListener("click", exportStandalone);

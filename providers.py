@@ -12,6 +12,7 @@ import hashlib
 import json
 import re
 import sqlite3
+from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
@@ -1288,12 +1289,16 @@ def _scan_opencode_legacy(root: Path, home: Path) -> tuple[list[dict], dict[str,
     return sessions, targets
 
 
-def _sqlite_ro(path: Path) -> sqlite3.Connection:
+@contextmanager
+def _sqlite_ro(path: Path) -> Iterable[sqlite3.Connection]:
     connection = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=0.2)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA busy_timeout=200")
     connection.execute("PRAGMA query_only=ON")
-    return connection
+    try:
+        yield connection
+    finally:
+        connection.close()
 
 
 def _table_columns(connection: sqlite3.Connection, table: str) -> set[str]:
@@ -1338,6 +1343,20 @@ GOOSE_SESSION_FIELDS = (
 GOOSE_MESSAGE_FIELDS = (
     "message_id", "id", "session_id", "role", "content_json",
     "created_timestamp", "created_at", "tokens", "metadata_json",
+)
+
+HERMES_SESSION_FIELDS = (
+    "id", "source", "model", "parent_session_id", "started_at", "ended_at",
+    "end_reason", "message_count", "tool_call_count", "input_tokens",
+    "output_tokens", "cache_read_tokens", "cache_write_tokens",
+    "reasoning_tokens", "title", "cwd", "git_branch", "git_repo_root",
+    "last_activity_at", "profile_name", "archived", "pinned", "hidden",
+)
+HERMES_MESSAGE_FIELDS = (
+    "id", "session_id", "role", "content", "tool_call_id", "tool_calls",
+    "tool_name", "timestamp", "token_count", "finish_reason", "reasoning",
+    "reasoning_details", "reasoning_content", "effect_disposition",
+    "display_kind", "display_metadata", "active", "compacted",
 )
 
 
@@ -1420,6 +1439,121 @@ def scan_goose(home: Path) -> ProviderResult:
             "Goose database unavailable: " + "; ".join(errors), "warning",
         )
     return _result("goose", sessions, targets)
+
+
+def _hermes_state_paths(home: Path) -> list[tuple[Path, str]]:
+    root = home / ".hermes"
+    paths = [(root / "state.db", "default")]
+    profiles = root / "profiles"
+    if profiles.is_dir():
+        paths.extend(
+            (profile / "state.db", profile.name)
+            for profile in sorted(profiles.iterdir())
+            if profile.is_dir()
+        )
+    found: list[tuple[Path, str]] = []
+    seen: set[Path] = set()
+    for path, profile in paths:
+        if not path.is_file():
+            continue
+        resolved = path.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        found.append((path, profile))
+    return found
+
+
+def _scan_hermes_db(
+    path: Path, home: Path, profile: str,
+) -> tuple[list[dict], dict[str, SessionTarget]]:
+    sessions: list[dict] = []
+    targets: dict[str, SessionTarget] = {}
+    with _sqlite_ro(path) as connection:
+        tables = _tables(connection)
+        if "sessions" not in tables or "messages" not in tables:
+            raise sqlite3.DatabaseError("sessions or messages table is missing")
+        session_columns = _table_columns(connection, "sessions")
+        if "id" not in session_columns:
+            raise sqlite3.DatabaseError("sessions table has no id")
+        selected = _selected_columns(session_columns, HERMES_SESSION_FIELDS)
+        fields = ", ".join(f'"{column}"' for column in selected)
+
+        message_columns = _table_columns(connection, "messages")
+        sizes: dict[str, int] = {}
+        if "session_id" in message_columns:
+            size_parts = [
+                f"length(COALESCE(\"{column}\", ''))"
+                for column in ("content", "tool_calls", "reasoning", "reasoning_content")
+                if column in message_columns
+            ]
+            size_expr = " + ".join(size_parts) or "0"
+            sizes = {
+                str(row["session_id"]): int(row["payload_size"] or 0)
+                for row in connection.execute(
+                    f'SELECT "session_id", SUM({size_expr}) AS payload_size '
+                    'FROM "messages" GROUP BY "session_id"'
+                )
+            }
+
+        for row in connection.execute(f'SELECT {fields} FROM "sessions"'):
+            data = {key: row[key] for key in row.keys() if row[key] is not None}
+            session_id = str(data.get("id") or "")
+            if not session_id or data.get("hidden") in (1, True):
+                continue
+            if int(data.get("message_count") or 0) <= 0:
+                continue
+            title = str(data.get("title") or "")
+            if not title and "session_id" in message_columns and "content" in message_columns:
+                first_user = connection.execute(
+                    'SELECT "content" FROM "messages" '
+                    'WHERE "session_id" = ? AND "role" = ? '
+                    'AND COALESCE("content", \'\') != \'\' ORDER BY "id" LIMIT 1',
+                    (session_id, "user"),
+                ).fetchone()
+                if first_user:
+                    title = str(first_user["content"] or "")
+            mtime = _timestamp(
+                data.get("last_activity_at") or data.get("ended_at") or
+                data.get("started_at"),
+                path.stat().st_mtime,
+            )
+            sid = _sid("hermes", f"{path.resolve()}:{session_id}")
+            entry: dict[str, Any] = {
+                "id": sid,
+                "source": "hermes",
+                "format": "hermes",
+                "project": _display_path(str(data.get("cwd") or ""), home),
+                "title": (title or session_id)[:120],
+                "mtime": mtime,
+                "size": sizes.get(session_id, 0),
+                "profile": str(data.get("profile_name") or profile),
+            }
+            _apply_native(entry, session_id)
+            if data.get("model"):
+                entry["model"] = data["model"]
+            sessions.append(entry)
+            targets[sid] = SessionTarget("hermes", path, session_id, (profile,))
+    return sessions, targets
+
+
+def scan_hermes(home: Path) -> ProviderResult:
+    sessions: list[dict] = []
+    targets: dict[str, SessionTarget] = {}
+    errors: list[str] = []
+    for path, profile in _hermes_state_paths(home):
+        try:
+            found, found_targets = _scan_hermes_db(path, home, profile)
+            sessions.extend(found)
+            targets.update(found_targets)
+        except (OSError, sqlite3.Error) as exc:
+            errors.append(f"{profile}: {exc}")
+    if errors:
+        return _result(
+            "hermes", sessions, targets,
+            "Hermes database unavailable: " + "; ".join(errors), "warning",
+        )
+    return _result("hermes", sessions, targets)
 
 
 def _row_object(row: sqlite3.Row) -> dict:
@@ -1832,6 +1966,7 @@ SCANNERS: tuple[tuple[str, Callable[[Path], ProviderResult]], ...] = (
     ("cline", scan_cline),
     ("roo", scan_roo),
     ("goose", scan_goose),
+    ("hermes", scan_hermes),
     ("vscode", scan_vscode),
     ("gemini", scan_gemini),
     ("opencode", scan_opencode),
@@ -2162,6 +2297,44 @@ def _load_goose(target: SessionTarget) -> str:
     )
 
 
+def _load_hermes(target: SessionTarget) -> str:
+    with _sqlite_ro(target.path) as connection:
+        if not {"sessions", "messages"}.issubset(_tables(connection)):
+            raise FileNotFoundError("Hermes session tables are unavailable")
+        session_columns = _table_columns(connection, "sessions")
+        selected = _selected_columns(session_columns, HERMES_SESSION_FIELDS)
+        fields = ", ".join(f'"{column}"' for column in selected)
+        row = connection.execute(
+            f'SELECT {fields} FROM "sessions" WHERE "id" = ?',
+            (target.key,),
+        ).fetchone()
+        if row is None:
+            raise FileNotFoundError("Hermes session is unavailable")
+        session = {key: row[key] for key in row.keys() if row[key] is not None}
+
+        message_columns = _table_columns(connection, "messages")
+        selected = _selected_columns(message_columns, HERMES_MESSAGE_FIELDS)
+        fields = ", ".join(f'"{column}"' for column in selected)
+        active_filter = (
+            ' AND ("active" IS NULL OR "active" = 1)'
+            if "active" in message_columns else ""
+        )
+        order = '"id"' if "id" in message_columns else '"timestamp"'
+        rows = connection.execute(
+            f'SELECT {fields} FROM "messages" WHERE "session_id" = ?'
+            f'{active_filter} ORDER BY {order}',
+            (target.key,),
+        )
+        messages = [
+            {key: item[key] for key in item.keys() if item[key] is not None}
+            for item in rows
+        ]
+    return json.dumps(
+        {"hermesArchive": True, "session": session, "messages": messages},
+        separators=(",", ":"), ensure_ascii=False, default=str,
+    )
+
+
 def _load_vscode(target: SessionTarget) -> str:
     state, diagnostics = _vscode_state(target.path)
     return json.dumps(
@@ -2240,6 +2413,8 @@ def load_target(target: SessionTarget) -> str:
         return _load_extension_task(target)
     if target.kind == "goose":
         return _load_goose(target)
+    if target.kind == "hermes":
+        return _load_hermes(target)
     if target.kind == "vscode":
         return _load_vscode(target)
     if target.kind == "gemini-jsonl":

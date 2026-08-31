@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import shutil
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -144,6 +145,44 @@ class McpProtocolTests(unittest.TestCase):
                 {"type": "assistant", "message": {"content": "First answer"}},
             ],
         )
+        hermes_db = self.home / ".hermes/state.db"
+        hermes_db.parent.mkdir(parents=True)
+        connection = sqlite3.connect(hermes_db)
+        connection.execute(
+            "CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT, model TEXT, "
+            "started_at REAL, ended_at REAL, message_count INTEGER, tool_call_count INTEGER, "
+            "title TEXT, cwd TEXT, hidden INTEGER DEFAULT 0)"
+        )
+        connection.execute(
+            "CREATE TABLE messages (id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, "
+            "content TEXT, tool_call_id TEXT, tool_calls TEXT, tool_name TEXT, "
+            "timestamp REAL, finish_reason TEXT, reasoning_content TEXT, active INTEGER DEFAULT 1)"
+        )
+        connection.execute(
+            "INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("20260831_hermes_fixture", "cli", "gpt-fixture", 10.0, 20.0,
+             4, 1, "Hermes MCP fixture", str(self.home / "work/hermes"), 0),
+        )
+        calls = json.dumps([{
+            "id": "call_hermes", "type": "function",
+            "function": {"name": "terminal", "arguments": "{\"command\":\"echo hermes\"}"},
+        }])
+        connection.executemany(
+            "INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                (1, "20260831_hermes_fixture", "user", "Hermes question", None,
+                 None, None, 10.0, None, None, 1),
+                (2, "20260831_hermes_fixture", "assistant", "", None, calls,
+                 None, 11.0, "tool_calls", "Need the terminal.", 1),
+                (3, "20260831_hermes_fixture", "tool",
+                 '{"output":"hermes output","exit_code":0,"error":null}',
+                 "call_hermes", None, "terminal", 12.0, None, None, 1),
+                (4, "20260831_hermes_fixture", "assistant", "Hermes answer", None,
+                 None, None, 13.0, "stop", None, 1),
+            ],
+        )
+        connection.commit()
+        connection.close()
 
     def call(self, method, params=None, version="2026-07-28"):
         message = {"jsonrpc": "2.0", "id": 1, "method": method}
@@ -205,10 +244,10 @@ class McpProtocolTests(unittest.TestCase):
 
     def test_list_sessions_filters_and_limits(self):
         rows = json.loads(self.tool_text("list_sessions", {}))
-        self.assertEqual(len(rows), 6)
+        self.assertEqual(len(rows), 7)
         self.assertEqual({row["source"] for row in rows},
                          {"pi", "claude", "kimi", "cursor-cli", "prime",
-                          "commandcode"})
+                          "commandcode", "hermes"})
         pi_rows = json.loads(self.tool_text("list_sessions", {"source": "pi"}))
         self.assertEqual([row["source"] for row in pi_rows], ["pi"])
         needle = json.loads(self.tool_text(
@@ -260,6 +299,21 @@ class McpProtocolTests(unittest.TestCase):
         self.assertIn("> thinking\nNeed a tool.", full)
         self.assertIn("claude-fixture", full)
         self.assertNotIn("omitted", full)
+
+    def test_get_hermes_session_preserves_reasoning_and_paired_tool(self):
+        rows = json.loads(self.tool_text("list_sessions", {"source": "hermes"}))
+        self.assertEqual(len(rows), 1)
+        transcript = self.tool_text("get_session", {
+            "id": rows[0]["id"], "include_tools": True,
+            "include_thinking": True,
+        })
+        self.assertIn("models: gpt-fixture", transcript)
+        self.assertIn("## user\nHermes question", transcript)
+        self.assertIn("> thinking\nNeed the terminal.", transcript)
+        self.assertIn("## tool · terminal", transcript)
+        self.assertIn('"command": "echo hermes"', transcript)
+        self.assertIn("↳ hermes output", transcript)
+        self.assertIn("## assistant\nHermes answer", transcript)
 
     def test_get_session_json_returns_raw_archive(self):
         rows = json.loads(self.tool_text("list_sessions", {"source": "claude"}))

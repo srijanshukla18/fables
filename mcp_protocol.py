@@ -107,6 +107,31 @@ def _content_text(content: Any) -> str:
     return ""
 
 
+def _json_value(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if not text or text[0] not in "[{":
+        return value
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return value
+
+
+def _tool_output_text(content: Any) -> str:
+    value = _json_value(content)
+    if isinstance(value, dict):
+        if value.get("output") is not None:
+            return str(value["output"])
+        if value.get("stdout") is not None or value.get("stderr") is not None:
+            parts = [str(value.get("stdout") or "")]
+            if value.get("stderr"):
+                parts.append("[stderr] " + str(value["stderr"]))
+            return "\n".join(part for part in parts if part)
+    return _content_text(value) if not isinstance(value, str) else value.strip()
+
+
 def _push(items: list[dict], kind: str, text: str, **extra: Any) -> dict:
     item: dict[str, Any] = {"kind": kind, "text": text}
     item.update(extra)
@@ -146,6 +171,11 @@ def _parse_message(record_type: str, message: dict, meta: dict, items: list,
             if text:
                 _push(items, "user", text)
     elif role == "assistant":
+        reasoning = message.get("reasoning_content") or message.get("reasoning")
+        if reasoning:
+            text = _tool_output_text(reasoning)
+            if text:
+                _push(items, "thinking", text)
         if isinstance(content, list):
             for block in content:
                 if not isinstance(block, dict):
@@ -172,20 +202,46 @@ def _parse_message(record_type: str, message: dict, meta: dict, items: list,
             text = _content_text(content)
             if text:
                 _push(items, "assistant", text)
+        tool_calls = _json_value(message.get("tool_calls"))
+        if isinstance(tool_calls, list):
+            for call in tool_calls:
+                if not isinstance(call, dict):
+                    continue
+                function = call.get("function")
+                function = function if isinstance(function, dict) else {}
+                arguments = _json_value(
+                    function.get("arguments", call.get("arguments"))
+                )
+                tool = _push(
+                    items, "tool", "",
+                    name=str(function.get("name") or call.get("name") or "tool"),
+                    input=arguments,
+                    output=None, isError=False,
+                )
+                call_id = call.get("id") or call.get("call_id") or call.get("tool_call_id")
+                if call_id:
+                    pending[str(call_id)] = tool
     elif role in ("toolResult", "tool"):
-        text = _content_text(content)
+        decoded = _json_value(content)
+        text = _tool_output_text(decoded)
         call_id = (message.get("toolCallId") or message.get("tool_use_id")
                    or message.get("tool_call_id"))
         tool = pending.pop(call_id, None) if call_id else None
-        name = str(message.get("toolName") or "")
+        name = str(message.get("toolName") or message.get("tool_name") or "")
+        is_error = bool(
+            message.get("isError") or message.get("is_error") or
+            message.get("effect_disposition") == "error" or
+            (isinstance(decoded, dict) and decoded.get("error")) or
+            (isinstance(decoded, dict) and decoded.get("exit_code") not in (None, 0))
+        )
         if tool is not None:
             tool["output"] = text
-            tool["isError"] = bool(message.get("isError") or message.get("is_error"))
+            tool["isError"] = is_error
         elif name:
             # Kimi-style archive: result carries its call metadata.
             _push(items, "tool", "", name=name,
                   input=message.get("arguments"), output=text,
-                  isError=bool(message.get("isError")))
+                  isError=is_error)
         elif text:
             _push(items, "info", text, label=f"{name or 'tool'} result (unpaired)")
     elif role == "bashExecution":
@@ -285,6 +341,13 @@ def parse_transcript(text: str) -> dict:
                     meta["cwd"] = str(session["cwd"])
                 if session.get("title"):
                     meta["title"] = str(session["title"])[:120]
+                if session.get("model"):
+                    _add_model(meta, str(session["model"]))
+                meta["start"] = session.get("started_at") or meta["start"]
+                meta["end"] = (
+                    session.get("ended_at") or session.get("last_activity_at") or
+                    meta["start"]
+                )
             for entry in data["messages"]:
                 if not isinstance(entry, dict):
                     continue
@@ -469,7 +532,7 @@ TOOLS = [
         "name": "list_sessions",
         "description": (
             "List coding-agent conversation sessions in this Fables library, "
-            "newest first. Sources include pi, prime, claude (Claude Code), "
+            "newest first. Sources include pi, prime, hermes, claude (Claude Code), "
             "codex, gemini, goose, cline, roo, vscode, opencode, cursor, "
             "cursor-cli, kimi, commandcode, copilot, amp, qwen, aider, trae, "
             "kiro, kilo, and zed. Returns opaque ids and native provider ids "
@@ -566,7 +629,7 @@ def _discover(scope: str) -> dict:
         "capabilities": {"tools": {}},
         "instructions": (
             "Fables exposes the coding-agent conversation sessions "
-            f"{scope} (pi, Prime Agent, Claude Code, Codex, Gemini CLI, "
+            f"{scope} (pi, Prime Agent, Hermes Agent, Claude Code, Codex, Gemini CLI, "
             "Goose, Cline, Roo Code, OpenCode, Cursor, Cursor CLI, Kimi CLI, "
             "Command Code, VS Code Chat, Copilot CLI, Amp, Qwen Code, Aider, "
             "Trae, Kiro, Kilo Code, and Zed). Use "

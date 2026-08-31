@@ -7,7 +7,7 @@ Model Context Protocol (2026-07-28 stateless spec): any MCP client
 (Codex CLI, Claude Code, pi, ...) can list, fetch, and search the
 conversation transcripts already stored on this machine — pi, Claude
 Code, Codex, Gemini CLI, Goose, Cline, Roo Code, OpenCode, Cursor,
-Cursor CLI, Kimi CLI, Command Code, Copilot CLI, Amp, Qwen Code, Aider,
+Cursor CLI, Kimi CLI, Command Code, Copilot CLI, Hermes Agent, Amp, Qwen Code, Aider,
 Trae, Kiro, Kilo Code, Zed, Prime Agent — without knowing any provider's
 on-disk format.
 
