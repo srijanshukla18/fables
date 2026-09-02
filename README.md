@@ -71,6 +71,46 @@ python3 serve.py
 
 Use `python3 serve.py 3000` to choose another port.
 
+## Durable imports
+
+Import copies normalized sessions into Fables' own durable library. It does
+**not** write Codex, Claude, pi, or another harness's private store, and it is
+separate from native restore or cross-harness handoff.
+
+The safe workflow is inspect → approve → digest-bound apply → verify:
+
+```bash
+fables import                                      # help only; never mutates
+fables import inspect export.zip --origin m2-work --format json
+fables import apply export.zip \
+  --origin m2-work \
+  --expect-sha256 'sha256:...' \
+  --format json
+fables import get 'im_...' --format json
+```
+
+`--origin` is optional during inspection and required during apply. It must be
+a user-supplied source label; agents must not invent one. Supplying it during
+inspection allows precise revision-versus-conflict classification. Apply is
+all-or-nothing, idempotent for the same digest and origin, and returns opaque
+`im_...` and `s_...` identifiers which callers must consume rather than infer.
+
+Read live and archived sessions through one command group:
+
+```bash
+fables session list --origin m2-work --format json
+fables session search 'keepass setup' --format json
+fables session get 's_...' --format markdown
+fables session provenance 's_...' --format json
+```
+
+The initial importer accepts Fables multi-session sharing ZIPs, single-session
+`fables.session.jsonl` files, and standalone Fables HTML archives. Sharing
+exports are visibly marked as potentially incomplete. See
+[`docs/imports.md`](docs/imports.md) for identity rules, storage, security,
+errors, and the agent contract. The shipped skill is at
+`skills/fables/SKILL.md` (and in the installed application directory).
+
 ## Supported sources
 
 | Source | Local store | Status |
@@ -150,6 +190,11 @@ args = ["mcp"]
 
 Tools:
 
+- `inspect_import`, `apply_import`, and `get_import` — the same safe import
+  plan as the CLI. `apply_import` requires `confirmed: true`, an explicit
+  origin, and the inspected digest
+- `get_session_provenance` — origins, provider/native identity, import IDs,
+  hashes, completeness, attachments, and revision relationships
 - `list_sessions` — newest sessions, filterable by source and by a query
   over title, cwd, opaque id, and native provider id (for example a pi UUID)
 - `get_session` — the conversation as readable text. **By default only user
@@ -168,7 +213,10 @@ Resume across agents: end a session in pi, open Codex, and ask it to
 `get_session` with the pi UUID (or `list_sessions` with `source: "pi"`),
 then continue the work in a fresh session.
 
-pi gets the same tools through `~/.pi/agent/extensions/fables-mcp.ts` (installed
+The local MCP server exposes import tools in addition to session tools. The
+remote cloud remains read-only and advertises only session tools.
+
+pi gets session tools through `~/.pi/agent/extensions/fables-mcp.ts` (installed
 by install-mcp.py): `fables_list_sessions`, `fables_get_session`, and
 `fables_search_sessions` appear as native pi tools on the next pi launch.
 

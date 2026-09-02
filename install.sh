@@ -83,13 +83,17 @@ PYTHON_BIN="${FABLES_PYTHON:-$(command -v python3 || true)}"
 [ -n "$PYTHON_BIN" ] || fail "Python 3.10 or newer is required"
 "$PYTHON_BIN" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' \
     || fail "Python 3.10 or newer is required (found: $PYTHON_BIN)"
-PYTHON_BIN=$(CDPATH= cd -P "$(dirname "$PYTHON_BIN")" >/dev/null 2>&1 && pwd)/$(basename "$PYTHON_BIN")
+case "$PYTHON_BIN" in
+    /*) : ;;
+    *) PYTHON_BIN=$(command -v "$PYTHON_BIN") ;;
+esac
 
-for file in serve.py providers.py fables-mcp.py install-mcp.py fables-mcp.ts mcp_protocol.py index.html fables.css fables-core.js fables-app.js fables-worker.js uninstall.sh bin/fables; do
+for file in serve.py providers.py fables-cli.py fables_library.py fables-mcp.py install-mcp.py fables-mcp.ts mcp_protocol.py index.html fables.css fables-core.js fables-app.js fables-worker.js skills/fables/SKILL.md uninstall.sh bin/fables; do
     [ -f "$SOURCE_DIR/$file" ] || fail "the source checkout is incomplete: missing $file"
 done
 
-mkdir -p "$INSTALL_DIR" "$BIN_DIR"
+mkdir -p "$INSTALL_DIR" "$BIN_DIR" "$INSTALL_DIR/skills/fables"
+chmod 0700 "$INSTALL_DIR"
 
 copy_file() {
     source_file=$1
@@ -102,9 +106,11 @@ copy_file() {
     fi
 }
 
-for file in serve.py providers.py index.html fables.css fables-core.js fables-app.js fables-worker.js; do
+for file in serve.py providers.py fables_library.py index.html fables.css fables-core.js fables-app.js fables-worker.js; do
     copy_file "$SOURCE_DIR/$file" "$INSTALL_DIR/$file" 0644
 done
+copy_file "$SOURCE_DIR/fables-cli.py" "$INSTALL_DIR/fables-cli.py" 0755
+copy_file "$SOURCE_DIR/skills/fables/SKILL.md" "$INSTALL_DIR/skills/fables/SKILL.md" 0644
 copy_file "$SOURCE_DIR/fables-mcp.py" "$INSTALL_DIR/fables-mcp.py" 0755
 copy_file "$SOURCE_DIR/mcp_protocol.py" "$INSTALL_DIR/mcp_protocol.py" 0644
 copy_file "$SOURCE_DIR/install-mcp.py" "$INSTALL_DIR/install-mcp.py" 0755

@@ -37,6 +37,8 @@ fi
 for file in \
     "$INSTALL_DIR/serve.py" \
     "$INSTALL_DIR/providers.py" \
+    "$INSTALL_DIR/fables-cli.py" \
+    "$INSTALL_DIR/fables_library.py" \
     "$INSTALL_DIR/fables-mcp.py" \
     "$INSTALL_DIR/fables-mcp.ts" \
     "$INSTALL_DIR/install-mcp.py" \
@@ -46,15 +48,22 @@ for file in \
     "$INSTALL_DIR/fables-core.js" \
     "$INSTALL_DIR/fables-app.js" \
     "$INSTALL_DIR/fables-worker.js" \
+    "$INSTALL_DIR/skills/fables/SKILL.md" \
     "$INSTALL_DIR/.port" \
     "$INSTALL_DIR/install.sh" \
     "$INSTALL_DIR/uninstall.sh"
 do
     [ ! -f "$file" ] || rm -f "$file"
 done
+rmdir "$INSTALL_DIR/skills/fables" >/dev/null 2>&1 || true
+rmdir "$INSTALL_DIR/skills" >/dev/null 2>&1 || true
+rm -rf "$INSTALL_DIR/__pycache__"
 rmdir "$INSTALL_DIR" >/dev/null 2>&1 || true
 
 printf 'Fables has been uninstalled.\n'
+if [ -f "$INSTALL_DIR/library.db" ] || [ -d "$INSTALL_DIR/objects" ] || [ -d "$INSTALL_DIR/imports" ]; then
+    printf 'The durable session library was preserved at %s\n' "$INSTALL_DIR"
+fi
 if [ "$PLATFORM" = "Darwin" ]; then
     printf 'Logs were kept in %s\n' "$HOME/Library/Logs/Fables"
 fi

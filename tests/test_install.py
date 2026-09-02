@@ -76,6 +76,15 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(service["EnvironmentVariables"]["PYTHONUNBUFFERED"], "1")
         self.assertTrue(control.exists())
         self.assertEqual((install_dir / ".port").read_text(), "9876\n")
+        self.assertTrue((install_dir / "fables-cli.py").exists())
+        self.assertTrue((install_dir / "fables_library.py").exists())
+        self.assertTrue((install_dir / "skills/fables/SKILL.md").exists())
+        import_help = subprocess.run(
+            [str(control), "import"], env=self.environment("Darwin"),
+            check=True, capture_output=True, text=True,
+        )
+        self.assertIn("usage: fables import", import_help.stdout)
+        self.assertFalse((install_dir / "library.db").exists())
         url = subprocess.run(
             [str(control), "url"],
             env=self.environment("Darwin"),
@@ -97,6 +106,22 @@ class InstallerTests(unittest.TestCase):
         self.assertFalse(plist.exists())
         self.assertFalse(control.exists())
         self.assertFalse(install_dir.exists())
+
+    def test_uninstall_preserves_a_durable_library(self):
+        self.fake_command("launchctl")
+        self.run_installer("Darwin")
+        install_dir = self.home / ".local/share/fables"
+        (install_dir / "library.db").write_bytes(b"library")
+        (install_dir / "objects").mkdir()
+        (install_dir / "imports").mkdir()
+        result = subprocess.run(
+            [str(install_dir / "uninstall.sh")], env=self.environment("Darwin"),
+            check=True, capture_output=True, text=True,
+        )
+        self.assertTrue((install_dir / "library.db").exists())
+        self.assertTrue((install_dir / "objects").is_dir())
+        self.assertFalse((install_dir / "serve.py").exists())
+        self.assertIn("durable session library was preserved", result.stdout)
 
     def test_linux_install_generates_and_enables_user_unit(self):
         self.fake_command("systemctl")

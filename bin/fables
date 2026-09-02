@@ -16,6 +16,10 @@ usage() {
 Usage: fables [command]
 
 Commands:
+  import     Inspect, apply, and verify durable session imports
+  session    List, search, read, and inspect session provenance
+  export     Show the distinct sharing and private-migration profiles
+  handoff    Show the separate future handoff operation
   open       Open Fables in the default browser (default)
   mcp        Run the stateless MCP server over stdio (for Codex CLI and other agents)
   mcp-http   Run the MCP server over HTTP on port 8322 (for Prime Agent)
@@ -89,6 +93,11 @@ ensure_started() {
 
 command=${1:-open}
 case "$command" in
+    import|session|export|handoff)
+        require_install
+        shift 2>/dev/null || true
+        exec python3 -B "$INSTALL_DIR/fables-cli.py" "$command" "$@"
+        ;;
     mcp)
         require_install
         shift 2>/dev/null || true
@@ -159,6 +168,6 @@ case "$command" in
     *)
         printf 'Unknown command: %s\n\n' "$command" >&2
         usage >&2
-        exit 1
+        exit 2
         ;;
 esac

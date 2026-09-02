@@ -20,6 +20,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
+from fables_library import Library, LibraryError
 from providers import SessionTarget, discover, load_target, resolve_session_id, AmbiguousSessionId
 
 HERE = Path(__file__).resolve().parent
@@ -45,7 +46,10 @@ def scan_sessions(home: Path | None = None) -> list[dict]:
     _paths = targets
     _sessions = sessions
     _provider_statuses = statuses
-    return sessions
+    imported = Library().list_sessions(limit=5000)
+    combined = [*sessions, *imported]
+    combined.sort(key=lambda item: float(item.get("mtime") or 0), reverse=True)
+    return combined
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -91,8 +95,27 @@ class Handler(BaseHTTPRequestHandler):
                     "sessions": sessions, "providers": _provider_statuses,
                 }).encode()
                 self._send(200, body, "application/json")
+            elif route.startswith("/api/provenance/"):
+                sid = unquote(route.rsplit("/", 1)[-1])
+                try:
+                    result = Library().provenance(sid)
+                except LibraryError as exc:
+                    code = 404 if exc.code == "session_not_found" else 409
+                    body = json.dumps(exc.envelope()).encode()
+                    self._send(code, body, "application/json")
+                    return
+                self._send(200, json.dumps(result).encode(), "application/json")
             elif route.startswith("/api/session/"):
                 sid = unquote(route.rsplit("/", 1)[-1])
+                if sid.startswith("s_"):
+                    try:
+                        text = Library().get_session_text(sid)
+                    except LibraryError as exc:
+                        code = 404 if exc.code == "session_not_found" else 500
+                        self._send(code, exc.message.encode(), "text/plain; charset=utf-8")
+                        return
+                    self._send(200, text.encode("utf-8"), "application/json; charset=utf-8")
+                    return
                 try:
                     _opaque, target = resolve_session_id(sid, _sessions, _paths)
                 except AmbiguousSessionId as exc:
@@ -101,7 +124,7 @@ class Handler(BaseHTTPRequestHandler):
                 except KeyError:
                     target = None
                 if target is None:
-                    scan_sessions()  # id from a fresh client; rebuild the map
+                    scan_sessions()  # id from a fresh client; rebuild the live map
                     try:
                         _opaque, target = resolve_session_id(sid, _sessions, _paths)
                     except (AmbiguousSessionId, KeyError):

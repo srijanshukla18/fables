@@ -44,6 +44,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from fables_library import Library, LibraryError
 from mcp_protocol import (
     McpBackend,
     PROTOCOL_VERSION,
@@ -56,9 +57,10 @@ from mcp_protocol import (
 from providers import discover, load_target
 
 SERVER_NAME = "fables-mcp"
-SERVER_VERSION = "0.1.0"
+SERVER_VERSION = "0.2.0"
 
 _HOME: Path | None = None  # overridden by --home or by tests
+_LIBRARY: Path | None = None
 _SCAN_TTL = 1.0            # seconds a discovery scan is cached in the backend
 
 
@@ -66,11 +68,19 @@ def session_home() -> Path:
     return _HOME or Path.home()
 
 
+def session_library() -> Library:
+    if _LIBRARY is not None:
+        return Library(_LIBRARY)
+    if _HOME is not None:
+        return Library(_HOME / ".local/share/fables")
+    return Library()
+
+
 class LocalBackend(McpBackend):
     """Serves the local providers.py discovery and loaders."""
 
     def __init__(self) -> None:
-        self._cache: tuple[float, list[dict], dict[str, Any], list[dict]] | None = None
+        self._cache: tuple[str, float, list[dict], dict[str, Any], list[dict]] | None = None
         self._lock = threading.Lock()
 
     def _discover(self) -> tuple[list[dict], dict[str, Any], list[dict]]:
@@ -81,6 +91,8 @@ class LocalBackend(McpBackend):
                     now - self._cache[1] < _SCAN_TTL:
                 return self._cache[2], self._cache[3], self._cache[4]
             sessions, targets, statuses = discover(session_home())
+            sessions.extend(session_library().list_sessions(limit=5000))
+            sessions.sort(key=lambda item: float(item.get("mtime") or 0), reverse=True)
             self._cache = (key, now, sessions, targets, statuses)
             return sessions, targets, statuses
 
@@ -89,11 +101,52 @@ class LocalBackend(McpBackend):
         return _sessions, [status["source"] for status in statuses]
 
     def load(self, sid: str) -> str:
+        if sid.startswith("s_"):
+            try:
+                return session_library().get_session_text(sid)
+            except Exception as exc:
+                if getattr(exc, "code", "") == "session_not_found":
+                    raise KeyError(sid) from None
+                raise
         _sessions, targets, _statuses = self._discover()
         target = targets.get(sid)
         if target is None:
             raise KeyError(sid)
         return load_target(target)
+
+    def inspect_import(self, input_path: str, origin: str | None = None) -> dict:
+        return session_library().inspect(input_path, origin=origin)
+
+    def apply_import(self, input_path: str, origin: str,
+                     expect_sha256: str) -> dict:
+        result = session_library().apply(input_path, origin, expect_sha256)
+        self._cache = None
+        return result
+
+    def get_import(self, import_id: str) -> dict:
+        return session_library().get_import(import_id)
+
+    def get_provenance(self, session_id: str) -> dict:
+        try:
+            return session_library().provenance(session_id)
+        except LibraryError as exc:
+            if exc.code != "session_not_found":
+                raise
+        sessions, _targets, _statuses = self._discover()
+        entry = next((item for item in sessions if item.get("id") == session_id), None)
+        if entry is None:
+            raise LibraryError("session_not_found", "No session has that identifier.",
+                               {"id": session_id})
+        return {
+            "session": {**entry, "archived": False, "origin": None},
+            "provenance": [{
+                "state": "live", "provider": entry.get("source"),
+                "native_id": entry.get("native_id") or None,
+                "provider_owned": True, "read_only": True,
+            }],
+            "relationships": {"revision_of": None, "revised_by": []},
+            "attachments": [],
+        }
 
 
 handle_message = make_handler(
@@ -101,6 +154,7 @@ handle_message = make_handler(
     server_name=SERVER_NAME,
     server_version=SERVER_VERSION,
     scope="stored on this machine",
+    import_tools=True,
 )
 
 
@@ -151,14 +205,18 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Fables MCP server (stateless, stdio)")
     parser.add_argument("--home", default=None,
                         help="session home directory (default: $HOME)")
+    parser.add_argument("--library", default=None,
+                        help="durable Fables library directory")
     parser.add_argument("--http", action="store_true",
                         help="serve over HTTP (Streamable-HTTP style) instead of stdio")
     parser.add_argument("--port", type=int, default=8322,
                         help="port for --http (default: 8322)")
     args = parser.parse_args(argv)
-    global _HOME
+    global _HOME, _LIBRARY
     if args.home:
         _HOME = Path(args.home).expanduser()
+    if args.library:
+        _LIBRARY = Path(args.library).expanduser()
     if args.http:
         return http_main(args.port)
     try:

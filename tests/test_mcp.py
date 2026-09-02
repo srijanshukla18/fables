@@ -7,6 +7,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from tests.test_library import make_zip
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
@@ -218,7 +220,8 @@ class McpProtocolTests(unittest.TestCase):
         self.assertEqual(result["resultType"], "complete")
         self.assertEqual(
             [tool["name"] for tool in result["tools"]],
-            ["list_sessions", "get_session", "search_sessions"],
+            ["list_sessions", "get_session", "search_sessions", "inspect_import",
+             "apply_import", "get_import", "get_session_provenance"],
         )
         for tool in result["tools"]:
             self.assertIn("inputSchema", tool)
@@ -230,6 +233,45 @@ class McpProtocolTests(unittest.TestCase):
         self.assertIn("include_tools", schemas["search_sessions"])
         self.assertEqual(result["ttlMs"], 300_000)
         self.assertEqual(result["cacheScope"], "public")
+
+    def test_import_tools_use_envelopes_confirmation_and_stable_ids(self):
+        bundle = make_zip(self.home / "export.zip", text="MCP imported passage")
+        inspected = json.loads(self.tool_text(
+            "inspect_import", {"input": str(bundle), "origin": "m1-air"}))
+        self.assertTrue(inspected["ok"])
+        self.assertEqual(inspected["result"]["sessions"]["new"], 1)
+
+        refused = self.call("tools/call", {"name": "apply_import", "arguments": {
+            "input": str(bundle), "origin": "m1-air",
+            "expect_sha256": inspected["result"]["sha256"],
+        }})
+        self.assertEqual(refused["error"]["code"], -32602)
+
+        applied = json.loads(self.tool_text("apply_import", {
+            "input": str(bundle), "origin": "m1-air",
+            "expect_sha256": inspected["result"]["sha256"], "confirmed": True,
+        }))
+        sid = applied["result"]["created"][0]
+        import_id = applied["result"]["import_id"]
+        verified = json.loads(self.tool_text("get_import", {"import_id": import_id}))
+        self.assertEqual(verified["result"]["state"], "complete")
+        provenance = json.loads(self.tool_text(
+            "get_session_provenance", {"id": sid}))
+        self.assertEqual(provenance["result"]["provenance"][0]["origin"], "m1-air")
+        imported = json.loads(self.tool_text(
+            "list_sessions", {"scope": "imported", "origin": "m1-air"}))
+        self.assertEqual([row["id"] for row in imported], [sid])
+        transcript = self.tool_text("get_session", {"id": sid})
+        self.assertIn("MCP imported passage", transcript)
+
+    def test_live_session_provenance_is_read_only_provider_owned(self):
+        rows = json.loads(self.tool_text("list_sessions", {"source": "pi"}))
+        value = json.loads(self.tool_text(
+            "get_session_provenance", {"id": rows[0]["id"]}))
+        self.assertTrue(value["ok"])
+        self.assertFalse(value["result"]["session"]["archived"])
+        self.assertTrue(value["result"]["provenance"][0]["provider_owned"])
+        self.assertTrue(value["result"]["provenance"][0]["read_only"])
 
     def test_unsupported_protocol_version_returns_32022(self):
         response = self.call("tools/list", version="2025-11-25")
@@ -420,7 +462,10 @@ class McpProtocolTests(unittest.TestCase):
             "params": {},
         }))
         names = [tool["name"] for tool in listed["result"]["tools"]]
-        self.assertEqual(names, ["list_sessions", "get_session", "search_sessions"])
+        self.assertEqual(names, [
+            "list_sessions", "get_session", "search_sessions", "inspect_import",
+            "apply_import", "get_import", "get_session_provenance",
+        ])
         # ping is answered for legacy keepalives.
         pong = handle_message(json.dumps({
             "jsonrpc": "2.0", "id": 2, "method": "ping", "params": {},

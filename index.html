@@ -22,6 +22,22 @@
         autocomplete="off"
       >
       <div class="chips" id="sourceChips" aria-label="Filter by source"></div>
+      <div class="shelffilters">
+        <label>
+          <span>state</span>
+          <select id="scopeFilter" aria-label="Filter live or archived sessions">
+            <option value="all">all</option>
+            <option value="live">live</option>
+            <option value="archived">archived</option>
+          </select>
+        </label>
+        <label>
+          <span>origin</span>
+          <select id="originFilter" aria-label="Filter by archive origin">
+            <option value="">all origins</option>
+          </select>
+        </label>
+      </div>
       <button
         class="exportall"
         id="exportAllBtn"
@@ -54,6 +70,10 @@
         </div>
       </div>
       <div class="metastrip" id="metastrip"></div>
+      <details class="diagnostics provenance" id="provenance" hidden>
+        <summary>archive provenance</summary>
+        <dl id="provenanceList"></dl>
+      </details>
       <details class="diagnostics" id="diagnostics" hidden>
         <summary></summary>
         <ul id="diagnosticList"></ul>

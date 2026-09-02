@@ -80,6 +80,21 @@ class McpBackend:
     def load(self, sid: str) -> str:
         raise NotImplementedError
 
+    # Local durable-library operations. Remote/read-only backends do not
+    # advertise these unless make_handler(import_tools=True) is requested.
+    def inspect_import(self, input_path: str, origin: str | None = None) -> dict:
+        raise NotImplementedError
+
+    def apply_import(self, input_path: str, origin: str,
+                     expect_sha256: str) -> dict:
+        raise NotImplementedError
+
+    def get_import(self, import_id: str) -> dict:
+        raise NotImplementedError
+
+    def get_provenance(self, session_id: str) -> dict:
+        raise NotImplementedError
+
 
 # ---------------------------------------------------------------------------
 # Transcript rendering (shared by get_session and search_sessions)
@@ -334,6 +349,24 @@ def parse_transcript(text: str) -> dict:
             data = json.loads(stripped)
         except json.JSONDecodeError:
             data = None
+        if isinstance(data, dict) and data.get("fablesVersion") == 2 and \
+                isinstance(data.get("items"), list):
+            raw_meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
+            meta = {
+                "title": str(raw_meta.get("title") or ""),
+                "cwd": str(raw_meta.get("cwd") or ""),
+                "models": [str(value) for value in (raw_meta.get("models") or [])],
+                "start": raw_meta.get("start") or "",
+                "end": raw_meta.get("end") or "",
+            }
+            normalized = []
+            for value in data["items"]:
+                if not isinstance(value, dict) or not value.get("kind"):
+                    continue
+                item = dict(value)
+                item.setdefault("text", "")
+                normalized.append(item)
+            return {"meta": meta, "items": normalized}
         if isinstance(data, dict) and isinstance(data.get("messages"), list):
             session = data.get("session")
             if isinstance(session, dict):
@@ -527,7 +560,7 @@ def _error(request_id: Any, code: int, message: str, data: Any = None) -> dict:
     return {"jsonrpc": "2.0", "id": request_id, "error": error}
 
 
-TOOLS = [
+SESSION_TOOLS = [
     {
         "name": "list_sessions",
         "description": (
@@ -546,6 +579,8 @@ TOOLS = [
                 "query": {"type": "string",
                           "description": "Case-insensitive substring matched against title, "
                                          "project, cwd, opaque id, and native provider id."},
+                "origin": {"type": "string", "description": "Restrict imported sessions to one origin."},
+                "scope": {"type": "string", "enum": ["all", "live", "imported"], "default": "all"},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 500, "default": 50},
             },
         },
@@ -607,6 +642,8 @@ TOOLS = [
                                          "native provider ids, or opaque hashes."},
                 "source": {"type": "string",
                            "description": "Restrict to one source, e.g. 'pi' or 'codex'."},
+                "origin": {"type": "string", "description": "Restrict imported sessions to one origin."},
+                "scope": {"type": "string", "enum": ["all", "live", "imported"], "default": "all"},
                 "include_thinking": {"type": "boolean", "default": False,
                                       "description": "Also search reasoning/thinking blocks "
                                                      "(default: messages only). Independent of "
@@ -622,8 +659,70 @@ TOOLS = [
     },
 ]
 
+IMPORT_TOOLS = [
+    {
+        "name": "inspect_import",
+        "description": (
+            "Read-only inspection of one exact Fables import input. Validates "
+            "format and ZIP safety, calculates SHA-256, reports completeness "
+            "and classifications, and never prints transcript bodies. Pass an "
+            "origin only when the user supplied it; it makes revision/conflict "
+            "classification precise."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "input": {"type": "string", "description": "Exact local input path."},
+                "origin": {"type": "string", "description": "Optional user-supplied source label."},
+            },
+            "required": ["input"],
+        },
+    },
+    {
+        "name": "apply_import",
+        "description": (
+            "Atomically apply an already inspected input to the durable Fables "
+            "library. Requires the exact inspected SHA-256, an explicit "
+            "user-supplied origin, and user confirmation. Never writes native "
+            "harness storage."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "input": {"type": "string"},
+                "origin": {"type": "string"},
+                "expect_sha256": {"type": "string"},
+                "confirmed": {"type": "boolean", "description": "True only after user approval."},
+            },
+            "required": ["input", "origin", "expect_sha256", "confirmed"],
+        },
+    },
+    {
+        "name": "get_import",
+        "description": "Verify import state and counts using the opaque import ID returned by apply_import.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"import_id": {"type": "string"}},
+            "required": ["import_id"],
+        },
+    },
+    {
+        "name": "get_session_provenance",
+        "description": "Return provider/native identity, origins, import IDs, hashes, completeness, attachments, and revision relationships.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"id": {"type": "string"}},
+            "required": ["id"],
+        },
+    },
+]
 
-def _discover(scope: str) -> dict:
+# Public compatibility constant: the local server advertises all tools; cloud
+# backends pass import_tools=False and expose SESSION_TOOLS only.
+TOOLS = SESSION_TOOLS + IMPORT_TOOLS
+
+
+def _discover(scope: str, import_tools: bool = False) -> dict:
     return {
         "supportedVersions": [PROTOCOL_VERSION],
         "capabilities": {"tools": {}},
@@ -638,7 +737,10 @@ def _discover(scope: str) -> dict:
             "opt-ins) for example to resume a conversation started in another agent, "
             "and search_sessions to find sessions by text. "
             "get_session accepts opaque hashes, native provider ids (for example a "
-            "pi UUID), and source:native_id. Everything is read-only."
+            "pi UUID), and source:native_id. "
+            + ("Import tools require read-only inspection before an explicitly "
+               "confirmed digest-bound apply and never write provider stores."
+               if import_tools else "Everything is read-only.")
         ),
     }
 
@@ -657,16 +759,27 @@ def _session_row(entry: dict) -> dict:
     }
     if entry.get("native_id"):
         row["native_id"] = entry["native_id"]
+    if entry.get("archived"):
+        row["archived"] = True
+        row["origin"] = entry.get("origin")
+        row["import_id"] = entry.get("import_id")
+    else:
+        row["archived"] = False
     return row
 
 
 def make_handler(backend: McpBackend, *, server_name: str = "fables-mcp",
-                 server_version: str = "", scope: str = "in this library") -> Callable[[str], dict | None]:
+                 server_version: str = "", scope: str = "in this library",
+                 import_tools: bool = False) -> Callable[[str], dict | None]:
     """Build a ``handle_message(raw) -> dict | None`` for one backend."""
 
     def tool_list_sessions(arguments: dict) -> str:
         query = str(arguments.get("query") or "").strip().lower()
         source = str(arguments.get("source") or "").strip().lower()
+        origin = str(arguments.get("origin") or "").strip()
+        archive_scope = str(arguments.get("scope") or "all").strip().lower()
+        if archive_scope not in ("all", "live", "imported"):
+            raise McpError(INVALID_PARAMS, "scope must be 'all', 'live', or 'imported'")
         try:
             limit = int(arguments.get("limit") or 50)
         except (TypeError, ValueError):
@@ -676,6 +789,12 @@ def make_handler(backend: McpBackend, *, server_name: str = "fables-mcp",
         rows = []
         for entry in sessions:
             if source and entry.get("source", "").lower() != source:
+                continue
+            if origin and entry.get("origin") != origin:
+                continue
+            if archive_scope == "live" and entry.get("archived"):
+                continue
+            if archive_scope == "imported" and not entry.get("archived"):
                 continue
             if query:
                 if query not in session_haystack(entry):
@@ -731,6 +850,10 @@ def make_handler(backend: McpBackend, *, server_name: str = "fables-mcp",
         if not query:
             raise McpError(INVALID_PARAMS, "Missing required argument: query")
         source = str(arguments.get("source") or "").strip().lower()
+        origin = str(arguments.get("origin") or "").strip()
+        archive_scope = str(arguments.get("scope") or "all").strip().lower()
+        if archive_scope not in ("all", "live", "imported"):
+            raise McpError(INVALID_PARAMS, "scope must be 'all', 'live', or 'imported'")
         include_tools = bool(arguments.get("include_tools"))
         include_thinking = bool(arguments.get("include_thinking"))
         try:
@@ -742,6 +865,12 @@ def make_handler(backend: McpBackend, *, server_name: str = "fables-mcp",
         matches = []
         for entry in sessions[:SEARCH_SCAN_LIMIT]:
             if source and entry.get("source", "").lower() != source:
+                continue
+            if origin and entry.get("origin") != origin:
+                continue
+            if archive_scope == "live" and entry.get("archived"):
+                continue
+            if archive_scope == "imported" and not entry.get("archived"):
                 continue
             snippet = _identifier_match_snippet(entry, query)
             if snippet is None:
@@ -776,6 +905,54 @@ def make_handler(backend: McpBackend, *, server_name: str = "fables-mcp",
                     f"(searched the {scanned} most recent sessions).")
         return json.dumps(matches, indent=2, ensure_ascii=False)
 
+    def _required_text(arguments: dict, key: str) -> str:
+        value = arguments.get(key)
+        if not isinstance(value, str) or not value.strip():
+            raise McpError(INVALID_PARAMS, f"Missing required argument: {key}")
+        return value.strip()
+
+    def _envelope(operation: Callable[[], dict]) -> str:
+        try:
+            result = operation()
+        except Exception as exc:
+            if hasattr(exc, "envelope"):
+                raise ToolFailure(json.dumps(exc.envelope(), indent=2,
+                                             ensure_ascii=False)) from None
+            raise
+        return json.dumps({"ok": True, "result": result}, indent=2,
+                          ensure_ascii=False)
+
+    def tool_inspect_import(arguments: dict) -> str:
+        input_path = _required_text(arguments, "input")
+        origin = arguments.get("origin")
+        if origin is not None and not isinstance(origin, str):
+            raise McpError(INVALID_PARAMS, "origin must be a string")
+        return _envelope(lambda: backend.inspect_import(input_path, origin))
+
+    def tool_apply_import(arguments: dict) -> str:
+        if arguments.get("confirmed") is not True:
+            raise McpError(INVALID_PARAMS,
+                           "apply_import requires confirmed=true after user approval")
+        input_path = _required_text(arguments, "input")
+        origin = _required_text(arguments, "origin")
+        expected = _required_text(arguments, "expect_sha256")
+        return _envelope(lambda: backend.apply_import(input_path, origin, expected))
+
+    def tool_get_import(arguments: dict) -> str:
+        import_id = _required_text(arguments, "import_id")
+        return _envelope(lambda: backend.get_import(import_id))
+
+    def tool_get_provenance(arguments: dict) -> str:
+        sid = _required_text(arguments, "id")
+        sessions, _sources = backend.list_sessions()
+        try:
+            entry = resolve_session_entry(sid, sessions)
+        except AmbiguousSessionId as exc:
+            raise ToolFailure(str(exc)) from None
+        except KeyError:
+            raise ToolFailure(f"Session {sid!r} not found. Pass a list_sessions ID.") from None
+        return _envelope(lambda: backend.get_provenance(entry["id"]))
+
     def call_tool(params: dict) -> dict:
         name = params.get("name")
         arguments = params.get("arguments") or {}
@@ -788,6 +965,14 @@ def make_handler(backend: McpBackend, *, server_name: str = "fables-mcp",
                 text = tool_get_session(arguments)
             elif name == "search_sessions":
                 text = tool_search_sessions(arguments)
+            elif import_tools and name == "inspect_import":
+                text = tool_inspect_import(arguments)
+            elif import_tools and name == "apply_import":
+                text = tool_apply_import(arguments)
+            elif import_tools and name == "get_import":
+                text = tool_get_import(arguments)
+            elif import_tools and name == "get_session_provenance":
+                text = tool_get_provenance(arguments)
             else:
                 raise McpError(INVALID_PARAMS, f"Unknown tool: {name}")
         except ToolFailure as exc:
@@ -802,7 +987,7 @@ def make_handler(backend: McpBackend, *, server_name: str = "fables-mcp",
             "protocolVersion": version,
             "capabilities": {"tools": {}},
             "serverInfo": {"name": server_name, "version": server_version},
-            "instructions": _discover(scope)["instructions"],
+            "instructions": _discover(scope, import_tools)["instructions"],
         }
 
     def handle_message(raw: str) -> dict | None:
@@ -838,11 +1023,12 @@ def make_handler(backend: McpBackend, *, server_name: str = "fables-mcp",
                 return _result(request_id, {}, server_name=server_name,
                                server_version=server_version)
             if method == "server/discover":
-                return _result(request_id, _discover(scope),
+                return _result(request_id, _discover(scope, import_tools),
                                cache={"ttlMs": 3_600_000, "cacheScope": "public"},
                                server_name=server_name, server_version=server_version)
             if method == "tools/list":
-                return _result(request_id, {"tools": TOOLS},
+                available_tools = TOOLS if import_tools else SESSION_TOOLS
+                return _result(request_id, {"tools": available_tools},
                                cache={"ttlMs": 300_000, "cacheScope": "public"},
                                server_name=server_name, server_version=server_version)
             if method == "tools/call":

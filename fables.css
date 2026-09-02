@@ -158,6 +158,33 @@ body.standalone .exportall {
   gap: 6px;
 }
 
+.shelffilters {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.shelffilters label {
+  display: grid;
+  gap: 3px;
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.7px;
+  text-transform: uppercase;
+}
+
+.shelffilters select {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--muted);
+  padding: 5px 6px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+}
+
 .chip {
   padding: 4px 9px;
   border: 1px solid var(--line);
@@ -400,6 +427,20 @@ body.standalone .actions {
   font-weight: 500;
 }
 
+.badge.archived {
+  border-color: rgba(91, 155, 213, 0.45);
+  color: #8bbde8;
+}
+
+.badge.warning {
+  border-color: rgba(227, 179, 65, 0.5);
+  color: var(--amber);
+}
+
+.metastrip .archiveorigin {
+  color: #8bbde8;
+}
+
 .metastrip .src {
   color: var(--source-color);
   font-weight: 600;
@@ -472,6 +513,26 @@ body.standalone .actions {
 
 .diagnostics.has-errors summary {
   color: var(--red);
+}
+
+.provenance dl {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 5px 12px;
+  margin: 9px 0 0;
+  font-family: var(--mono);
+  font-size: 10.5px;
+}
+
+.provenance dt {
+  color: var(--faint);
+}
+
+.provenance dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--muted);
 }
 
 .diagnostics ul {

@@ -28,6 +28,8 @@ const state = {
   sessions: [],
   providers: [],
   filterSrc: "",
+  filterScope: "all",
+  filterOrigin: "",
   current: null,
   raw: "",
   parsed: null,
@@ -654,6 +656,16 @@ function renderHeader() {
   source.textContent = sourceLabel(meta.source);
   strip.appendChild(source);
 
+  if (state.current && state.current.archived) {
+    const archive = document.createElement("span");
+    archive.className = "kv archiveorigin";
+    archive.append("archived from ");
+    const bold = document.createElement("b");
+    bold.textContent = state.current.origin || "unknown origin";
+    archive.appendChild(bold);
+    strip.appendChild(archive);
+  }
+
   const models = [...(meta.models || [])];
   if (models.length) {
     const value = document.createElement("span");
@@ -871,6 +883,7 @@ async function openSession(session, options) {
     if (opts.history) setRoute(session.id, opts.history);
     renderSession();
     renderShelf();
+    loadProvenance(session, serial);
     closeShelf();
     setLoading("");
   } catch (error) {
@@ -885,9 +898,13 @@ function visibleSessions() {
   const query = $("finder").value.trim().toLowerCase();
   return state.sessions.filter((session) => {
     if (state.filterSrc && session.source !== state.filterSrc) return false;
+    if (state.filterScope === "live" && session.archived) return false;
+    if (state.filterScope === "archived" && !session.archived) return false;
+    if (state.filterOrigin && session.origin !== state.filterOrigin) return false;
     return !query || (
       String(session.title || "") + " " +
       String(session.project || "") + " " +
+      String(session.origin || "") + " " +
       sourceLabel(session.source)
     ).toLowerCase().includes(query);
   });
@@ -922,6 +939,18 @@ function renderShelf() {
       const badge = document.createElement("span");
       badge.className = "badge";
       badge.textContent = "experimental";
+      meta.appendChild(badge);
+    }
+    if (session.archived) {
+      const badge = document.createElement("span");
+      badge.className = "badge archived";
+      badge.textContent = "archived from " + (session.origin || "unknown");
+      meta.appendChild(badge);
+    }
+    if (session.redacted || session.incomplete) {
+      const badge = document.createElement("span");
+      badge.className = "badge warning";
+      badge.textContent = session.redacted ? "incomplete/redacted" : "sharing export";
       meta.appendChild(badge);
     }
     const project = document.createElement("span");
@@ -975,6 +1004,64 @@ function renderSourceChips() {
       "all " + state.sessions.length;
     button.addEventListener("click", () => selectSource(source));
     wrap.appendChild(button);
+  }
+}
+
+function renderArchiveFilters() {
+  const origins = [...new Set(state.sessions
+    .filter((session) => session.archived && session.origin)
+    .map((session) => session.origin))].sort();
+  const select = $("originFilter");
+  select.innerHTML = "";
+  const all = document.createElement("option");
+  all.value = "";
+  all.textContent = "all origins";
+  select.appendChild(all);
+  for (const origin of origins) {
+    const option = document.createElement("option");
+    option.value = origin;
+    option.textContent = origin;
+    select.appendChild(option);
+  }
+  if (origins.includes(state.filterOrigin)) select.value = state.filterOrigin;
+  else state.filterOrigin = "";
+  $("scopeFilter").value = state.filterScope;
+}
+
+function addProvenanceRow(list, label, value) {
+  if (value === undefined || value === null || value === "") return;
+  const term = document.createElement("dt");
+  term.textContent = label;
+  const detail = document.createElement("dd");
+  detail.textContent = typeof value === "object" ? JSON.stringify(value) : String(value);
+  list.append(term, detail);
+}
+
+async function loadProvenance(session, serial) {
+  const panel = $("provenance");
+  const list = $("provenanceList");
+  panel.hidden = true;
+  list.innerHTML = "";
+  if (!session || !session.archived || document.body.classList.contains("standalone")) return;
+  try {
+    const response = await fetch("/api/provenance/" + encodeURIComponent(session.id));
+    if (!response.ok || serial !== state.requestSerial) return;
+    const data = await response.json();
+    if (serial !== state.requestSerial) return;
+    const current = data.session || {};
+    addProvenanceRow(list, "Fables session ID", current.id);
+    addProvenanceRow(list, "origin", current.origin);
+    addProvenanceRow(list, "provider / native ID", current.source + (current.native_id ? " · " + current.native_id : ""));
+    addProvenanceRow(list, "import ID", current.import_id);
+    addProvenanceRow(list, "raw SHA-256", current.raw_digest);
+    addProvenanceRow(list, "normalized SHA-256", current.normalized_digest);
+    addProvenanceRow(list, "completeness", current.completeness);
+    const relationships = data.relationships || {};
+    addProvenanceRow(list, "revision of", relationships.revision_of);
+    addProvenanceRow(list, "revised by", relationships.revised_by && relationships.revised_by.join(", "));
+    panel.hidden = !list.children.length;
+  } catch (error) {
+    // Provenance is supplementary; transcript reading remains available.
   }
 }
 
@@ -1498,9 +1585,11 @@ function handleKeys(event) {
 }
 
 function routeSession() {
-  const match = location.hash.match(/^#s=([a-f0-9]{12})$/);
+  const match = location.hash.match(/^#s=([^&]+)$/);
   if (!match) return null;
-  return state.sessions.find((session) => session.id === match[1]) || null;
+  let id;
+  try { id = decodeURIComponent(match[1]); } catch (error) { return null; }
+  return state.sessions.find((session) => session.id === id) || null;
 }
 
 async function boot() {
@@ -1526,6 +1615,7 @@ async function boot() {
         source, count, status: "ok",
       }));
       renderSourceChips();
+      renderArchiveFilters();
       renderProviderStatus();
       renderShelf();
       const requested = routeSession();
@@ -1561,6 +1651,7 @@ async function boot() {
     return;
   }
   renderSourceChips();
+  renderArchiveFilters();
   renderProviderStatus();
   renderShelf();
   $("exportAllBtn").disabled = !state.sessions.length;
@@ -1570,6 +1661,18 @@ async function boot() {
 }
 
 $("finder").addEventListener("input", renderShelf);
+$("scopeFilter").addEventListener("change", () => {
+  state.filterScope = $("scopeFilter").value;
+  renderShelf();
+});
+$("originFilter").addEventListener("change", () => {
+  state.filterOrigin = $("originFilter").value;
+  if (state.filterOrigin) {
+    state.filterScope = "archived";
+    $("scopeFilter").value = "archived";
+  }
+  renderShelf();
+});
 $("insearch").addEventListener("input", handleSearchInput);
 $("shareBtn").addEventListener("click", openShareReview);
 $("exportAllBtn").addEventListener("click", openExportAllReview);
