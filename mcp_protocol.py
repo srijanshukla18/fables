@@ -23,8 +23,9 @@ A backend provides:
 from __future__ import annotations
 
 import json
+import re
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from providers import AmbiguousSessionId, resolve_session_entry, session_haystack
@@ -61,6 +62,11 @@ MAX_RENDER_CHARS = 2_000_000      # get_session readable transcript cap
 SEARCH_SCAN_LIMIT = 250           # newest sessions searched by search_sessions
 SEARCH_RENDER_CHARS = 60_000      # per-session search window
 MAX_SNIPPET_CHARS = 300
+
+_TIMESTAMP_MARKER = re.compile(r"<timestamp>(.*?)</timestamp>", re.S)
+_CURSOR_TIMESTAMP = re.compile(
+    r"^(?P<date>.+?)\s+\(UTC(?P<sign>[+-])(?P<hours>\d{1,2}):(?P<minutes>\d{2})\)$"
+)
 
 # JSON-RPC error codes.
 PARSE_ERROR = -32700
@@ -147,8 +153,154 @@ def _tool_output_text(content: Any) -> str:
     return _content_text(value) if not isinstance(value, str) else value.strip()
 
 
+def _iso_timestamp(value: Any) -> str:
+    """Normalize provider timestamps to UTC ISO-8601, or return an empty string."""
+    if value is None or isinstance(value, bool):
+        return ""
+    parsed: datetime
+    if isinstance(value, datetime):
+        parsed = value
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        else:
+            parsed = parsed.astimezone(timezone.utc)
+    elif isinstance(value, (int, float)):
+        number = float(value)
+        if number > 10_000_000_000:
+            number /= 1000
+        try:
+            parsed = datetime.fromtimestamp(number, tz=timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            return ""
+    elif isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return ""
+        try:
+            return _iso_timestamp(float(text))
+        except ValueError:
+            pass
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return ""
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        else:
+            parsed = parsed.astimezone(timezone.utc)
+    else:
+        return ""
+    timespec = "microseconds" if parsed.microsecond % 1000 else (
+        "milliseconds" if parsed.microsecond else "seconds"
+    )
+    return parsed.isoformat(timespec=timespec).replace("+00:00", "Z")
+
+
+def _inline_timestamp(text: str) -> str:
+    """Read Cursor CLI's inline ``<timestamp>...UTC±H:MM</timestamp>`` marker."""
+    for value in _TIMESTAMP_MARKER.findall(text):
+        match = _CURSOR_TIMESTAMP.match(value.strip())
+        if not match:
+            continue
+        try:
+            parsed = datetime.strptime(
+                match.group("date"), "%A, %b %d, %Y, %I:%M %p"
+            )
+        except ValueError:
+            continue
+        offset = timedelta(
+            hours=int(match.group("hours")), minutes=int(match.group("minutes"))
+        )
+        if match.group("sign") == "-":
+            offset = -offset
+        return _iso_timestamp(parsed.replace(tzinfo=timezone(offset)))
+    return ""
+
+
+def _raw_item_timestamp(item: dict) -> str:
+    direct = _iso_timestamp(item.get("timestamp"))
+    if direct:
+        return direct
+    raw = item.get("raw")
+    records = raw if isinstance(raw, list) else ([raw] if isinstance(raw, dict) else [])
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        stamp = _iso_timestamp(
+            record.get("timestamp") or record.get("created_at")
+            or record.get("createdAt") or record.get("time")
+        )
+        if stamp:
+            return stamp
+    return ""
+
+
+def _update_meta_time(meta: dict, stamp: str) -> None:
+    if not stamp:
+        return
+    if not meta.get("start"):
+        meta["start"] = stamp
+    meta["end"] = stamp
+
+
+def _finalize_timestamps(meta: dict, items: list[dict]) -> None:
+    """Attach the best available timestamp to each item and normalize meta bounds."""
+    meta_start = _iso_timestamp(meta.get("start"))
+    meta_end = _iso_timestamp(meta.get("end"))
+    if meta_start:
+        meta["start"] = meta_start
+    if meta_end:
+        meta["end"] = meta_end
+
+    for item in items:
+        stamp = _raw_item_timestamp(item)
+        if not stamp and item.get("kind") == "user":
+            stamp = _inline_timestamp(str(item.get("text") or ""))
+        if stamp:
+            item["timestamp"] = stamp
+
+    has_item_time = any(item.get("timestamp") for item in items)
+    previous = ""
+    message_indexes = [index for index, item in enumerate(items)
+                       if item.get("kind") in ("user", "assistant")]
+    last_message_index = message_indexes[-1] if message_indexes else len(items) - 1
+    for index, item in enumerate(items):
+        stamp = str(item.get("timestamp") or "")
+        if not stamp:
+            if not has_item_time and index == last_message_index and meta_end:
+                stamp = meta_end
+            else:
+                stamp = previous or meta_start
+            if stamp:
+                item["timestamp"] = stamp
+                item["timestamp_approximate"] = True
+        previous = stamp or previous
+
+    item_times = [str(item.get("timestamp") or "") for item in items
+                  if item.get("timestamp")]
+    if item_times:
+        if not meta.get("start"):
+            meta["start"] = item_times[0]
+        if not meta.get("end"):
+            meta["end"] = item_times[-1]
+
+
+def _last_message_timestamp(parsed: dict) -> tuple[str, bool]:
+    for item in reversed(parsed.get("items") or []):
+        if item.get("kind") not in ("user", "assistant"):
+            continue
+        stamp = str(item.get("timestamp") or "")
+        if stamp:
+            return stamp, bool(item.get("timestamp_approximate"))
+    return "", False
+
+
 def _push(items: list[dict], kind: str, text: str, **extra: Any) -> dict:
     item: dict[str, Any] = {"kind": kind, "text": text}
+    if extra.get("timestamp"):
+        extra["timestamp"] = _iso_timestamp(extra["timestamp"])
+    else:
+        extra.pop("timestamp", None)
     item.update(extra)
     items.append(item)
     return item
@@ -160,37 +312,18 @@ def _add_model(meta: dict, model: str) -> None:
 
 
 def _parse_message(record_type: str, message: dict, meta: dict, items: list,
-                   pending: dict) -> None:
+                   pending: dict, timestamp: Any = "") -> None:
     role = message.get("role") or record_type
     content = message.get("content")
+    stamp = _iso_timestamp(
+        timestamp or message.get("timestamp") or message.get("created_at")
+        or message.get("createdAt")
+    )
+
+    def push(kind: str, text: str, **extra: Any) -> dict:
+        return _push(items, kind, text, timestamp=stamp, **extra)
+
     if role == "user":
-        if isinstance(content, list):
-            for block in content:
-                if not isinstance(block, dict):
-                    continue
-                kind = block.get("type")
-                if kind == "text" and str(block.get("text") or "").strip():
-                    _push(items, "user", str(block["text"]))
-                elif kind == "tool_result":
-                    tool = pending.pop(block.get("tool_use_id"), None)
-                    text = _content_text(block.get("content"))
-                    if tool is not None:
-                        tool["output"] = text
-                        tool["isError"] = bool(block.get("is_error"))
-                    elif text:
-                        _push(items, "info", text, label="tool result (unpaired)")
-                elif kind == "image":
-                    _push(items, "user", "[image attached]")
-        else:
-            text = _content_text(content)
-            if text:
-                _push(items, "user", text)
-    elif role == "assistant":
-        reasoning = message.get("reasoning_content") or message.get("reasoning")
-        if reasoning:
-            text = _tool_output_text(reasoning)
-            if text:
-                _push(items, "thinking", text)
         if isinstance(content, list):
             for block in content:
                 if not isinstance(block, dict):
@@ -198,15 +331,42 @@ def _parse_message(record_type: str, message: dict, meta: dict, items: list,
                 kind = block.get("type")
                 if kind in ("text", "input_text", "output_text") and \
                         str(block.get("text") or "").strip():
-                    _push(items, "assistant", str(block["text"]))
-                elif kind == "thinking" or kind == "reasoning":
+                    push("user", str(block["text"]))
+                elif kind == "tool_result":
+                    tool = pending.pop(block.get("tool_use_id"), None)
+                    text = _content_text(block.get("content"))
+                    if tool is not None:
+                        tool["output"] = text
+                        tool["isError"] = bool(block.get("is_error"))
+                    elif text:
+                        push("info", text, label="tool result (unpaired)")
+                elif kind == "image":
+                    push("user", "[image attached]")
+        else:
+            text = _content_text(content)
+            if text:
+                push("user", text)
+    elif role == "assistant":
+        reasoning = message.get("reasoning_content") or message.get("reasoning")
+        if reasoning:
+            text = _tool_output_text(reasoning)
+            if text:
+                push("thinking", text)
+        if isinstance(content, list):
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                kind = block.get("type")
+                if kind in ("text", "input_text", "output_text") and \
+                        str(block.get("text") or "").strip():
+                    push("assistant", str(block["text"]))
+                elif kind in ("thinking", "reasoning"):
                     thinking = str(block.get("thinking") or block.get("text") or "")
                     if thinking.strip():
-                        _push(items, "thinking", thinking)
+                        push("thinking", thinking)
                 elif kind in ("tool_use", "toolCall", "tool_call"):
-                    tool = _push(
-                        items, "tool", "",
-                        name=str(block.get("name") or ""),
+                    tool = push(
+                        "tool", "", name=str(block.get("name") or ""),
                         input=block.get("input", block.get("arguments")),
                         output=None, isError=False,
                     )
@@ -216,7 +376,7 @@ def _parse_message(record_type: str, message: dict, meta: dict, items: list,
         else:
             text = _content_text(content)
             if text:
-                _push(items, "assistant", text)
+                push("assistant", text)
         tool_calls = _json_value(message.get("tool_calls"))
         if isinstance(tool_calls, list):
             for call in tool_calls:
@@ -227,11 +387,10 @@ def _parse_message(record_type: str, message: dict, meta: dict, items: list,
                 arguments = _json_value(
                     function.get("arguments", call.get("arguments"))
                 )
-                tool = _push(
-                    items, "tool", "",
+                tool = push(
+                    "tool", "",
                     name=str(function.get("name") or call.get("name") or "tool"),
-                    input=arguments,
-                    output=None, isError=False,
+                    input=arguments, output=None, isError=False,
                 )
                 call_id = call.get("id") or call.get("call_id") or call.get("tool_call_id")
                 if call_id:
@@ -254,34 +413,32 @@ def _parse_message(record_type: str, message: dict, meta: dict, items: list,
             tool["isError"] = is_error
         elif name:
             # Kimi-style archive: result carries its call metadata.
-            _push(items, "tool", "", name=name,
-                  input=message.get("arguments"), output=text,
-                  isError=is_error)
+            push("tool", "", name=name, input=message.get("arguments"),
+                 output=text, isError=is_error)
         elif text:
-            _push(items, "info", text, label=f"{name or 'tool'} result (unpaired)")
+            push("info", text, label=f"{name or 'tool'} result (unpaired)")
     elif role == "bashExecution":
-        _push(
-            items, "tool", "",
-            name="bash", input=message.get("command"),
+        push(
+            "tool", "", name="bash", input=message.get("command"),
             output=message.get("output") or "",
             isError=message.get("exitCode") not in (None, 0),
         )
     elif role == "system":
         text = _content_text(content)
         if text:
-            _push(items, "info", text, label="system")
+            push("info", text, label="system")
 
 
-def _parse_codex_item(payload: dict, meta: dict, items: list, pending: dict) -> None:
+def _parse_codex_item(payload: dict, meta: dict, items: list, pending: dict,
+                      timestamp: Any = "") -> None:
     kind = payload.get("type")
     if kind == "message":
-        _parse_message("assistant", payload, meta, items, pending)
+        _parse_message("assistant", payload, meta, items, pending, timestamp)
     elif kind == "function_call" or (kind and kind.endswith("_call")):
         tool = _push(
-            items, "tool", "",
+            items, "tool", "", timestamp=timestamp,
             name=str(payload.get("name") or kind[:-5]),
-            input=payload.get("arguments"),
-            output=None, isError=False,
+            input=payload.get("arguments"), output=None, isError=False,
         )
         if payload.get("call_id"):
             pending[str(payload["call_id"])] = tool
@@ -291,26 +448,32 @@ def _parse_codex_item(payload: dict, meta: dict, items: list, pending: dict) -> 
         if tool is not None:
             tool["output"] = text
         elif text:
-            _push(items, "info", text, label="tool result (unpaired)")
+            _push(items, "info", text, timestamp=timestamp,
+                  label="tool result (unpaired)")
 
 
 def _parse_record(obj: dict, meta: dict, items: list, pending: dict) -> None:
     kind = obj.get("type")
     message = obj.get("message")
     role = obj.get("role")
+    timestamp = _iso_timestamp(
+        obj.get("timestamp") or obj.get("created_at") or obj.get("createdAt")
+        or obj.get("time")
+    )
+    _update_meta_time(meta, timestamp)
     if isinstance(message, dict) and (kind in ("user", "assistant", "message", "system")
                                      or role in ("user", "assistant", "system")):
-        _parse_message(role or kind, message, meta, items, pending)
+        _parse_message(role or kind, message, meta, items, pending, timestamp)
         return
     if kind is None and role in ("user", "assistant", "system", "tool") and \
             obj.get("content") is not None:
         # Command Code / Qwen style: role and content on the record itself.
-        _parse_message(role, obj, meta, items, pending)
+        _parse_message(role, obj, meta, items, pending, timestamp)
         return
     if kind == "response_item":
         payload = obj.get("payload")
         if isinstance(payload, dict):
-            _parse_codex_item(payload, meta, items, pending)
+            _parse_codex_item(payload, meta, items, pending, timestamp)
         return
     if kind == "session_meta":
         payload = obj.get("payload")
@@ -318,6 +481,9 @@ def _parse_record(obj: dict, meta: dict, items: list, pending: dict) -> None:
             meta["cwd"] = str(payload["cwd"])
         return
     if kind == "event_msg":
+        # Codex mirrors user/assistant content in event_msg and response_item
+        # records. response_item is canonical; event_msg contributes metadata
+        # only so live rollouts do not render every message twice.
         payload = obj.get("payload")
         if not isinstance(payload, dict):
             return
@@ -366,6 +532,7 @@ def parse_transcript(text: str) -> dict:
                 item = dict(value)
                 item.setdefault("text", "")
                 normalized.append(item)
+            _finalize_timestamps(meta, normalized)
             return {"meta": meta, "items": normalized}
         if isinstance(data, dict) and isinstance(data.get("messages"), list):
             session = data.get("session")
@@ -385,12 +552,17 @@ def parse_transcript(text: str) -> dict:
                 if not isinstance(entry, dict):
                     continue
                 message = entry.get("message") if isinstance(entry.get("message"), dict) else entry
-                _parse_message(message.get("type") or "message", message, meta, items, pending)
+                _parse_message(
+                    message.get("type") or "message", message, meta, items, pending,
+                    entry.get("timestamp") or entry.get("created_at")
+                    or entry.get("createdAt"),
+                )
             if not meta["title"]:
                 for item in items:
                     if item["kind"] == "user":
                         meta["title"] = item["text"][:120]
                         break
+            _finalize_timestamps(meta, items)
             return {"meta": meta, "items": items}
     for line in stripped.splitlines():
         line = line.strip()
@@ -407,6 +579,7 @@ def parse_transcript(text: str) -> dict:
             if item["kind"] == "user":
                 meta["title"] = item["text"][:120]
                 break
+    _finalize_timestamps(meta, items)
     return {"meta": meta, "items": items}
 
 
@@ -458,7 +631,8 @@ def _omission_hint(skipped_thinking: bool, skipped_tools: bool) -> str:
 
 def render_transcript(text: str, max_chars: int = MAX_RENDER_CHARS,
                       include_tools: bool = False,
-                      include_thinking: bool = False) -> str:
+                      include_thinking: bool = False,
+                      include_timestamps: bool = True) -> str:
     """Render a raw archive as readable text.
 
     By default only user and assistant messages are rendered, keeping the
@@ -484,6 +658,13 @@ def render_transcript(text: str, max_chars: int = MAX_RENDER_CHARS,
         out.append(" · ".join(details))
     skipped_thinking = False
     skipped_tools = False
+
+    def timestamp_suffix(item: dict) -> str:
+        if not include_timestamps or not item.get("timestamp"):
+            return ""
+        approximate = "≈ " if item.get("timestamp_approximate") else ""
+        return f" · {approximate}{item['timestamp']}"
+
     for item in parsed["items"]:
         kind = item["kind"]
         if not _keep_item(kind, include_tools, include_thinking):
@@ -493,15 +674,16 @@ def render_transcript(text: str, max_chars: int = MAX_RENDER_CHARS,
                 skipped_tools = True
             continue
         text = item["text"]
+        stamp = timestamp_suffix(item)
         if kind == "user":
-            out.append(f"\n## user\n{text}")
+            out.append(f"\n## user{stamp}\n{text}")
         elif kind == "assistant":
-            out.append(f"\n## assistant\n{text}")
+            out.append(f"\n## assistant{stamp}\n{text}")
         elif kind == "thinking":
-            out.append(f"\n> thinking\n{text}")
+            out.append(f"\n> thinking{stamp}\n{text}")
         elif kind == "tool":
             name = item.get("name") or "tool"
-            out.append(f"\n## tool · {name}")
+            out.append(f"\n## tool · {name}{stamp}")
             if item.get("input") is not None and item["input"] != "":
                 out.append(_compact(item["input"]))
             if item.get("output") is not None:
@@ -509,7 +691,7 @@ def render_transcript(text: str, max_chars: int = MAX_RENDER_CHARS,
                 out.append(f"{marker} {_compact(item['output'], 4000)}")
         elif kind == "info":
             label = item.get("label") or "note"
-            out.append(f"\n({label}) {_compact(text, 2000)}")
+            out.append(f"\n({label}{stamp}) {_compact(text, 2000)}")
     rendered = "\n".join(out).strip()
     hint = _omission_hint(skipped_thinking, skipped_tools)
     if hint:
@@ -568,8 +750,9 @@ SESSION_TOOLS = [
             "newest first. Sources include pi, prime, hermes, claude (Claude Code), "
             "codex, gemini, goose, cline, roo, vscode, opencode, cursor, "
             "cursor-cli, kimi, commandcode, copilot, amp, qwen, aider, trae, "
-            "kiro, kilo, and zed. Returns opaque ids and native provider ids "
-            "(for example a pi UUID) to pass to get_session."
+            "kiro, kilo, and zed. Returns opaque ids, native provider ids, "
+            "and the last user/assistant message timestamp when available. "
+            "Use an id (for example a pi UUID) with get_session."
         ),
         "inputSchema": {
             "type": "object",
@@ -588,7 +771,8 @@ SESSION_TOOLS = [
     {
         "name": "get_session",
         "description": (
-            "Fetch the complete transcript of one session as readable text. "
+            "Fetch the complete transcript of one session as readable text, "
+            "including a UTC timestamp on each rendered item when available. "
             "By default only user and assistant messages are returned, which "
             "keeps the output compact for agent context. Pass "
             "include_thinking=true for reasoning/thinking blocks, and/or "
@@ -631,8 +815,9 @@ SESSION_TOOLS = [
             "and assistant messages are searched. Pass include_thinking=true "
             "to also search reasoning/thinking blocks, and/or "
             "include_tools=true to also search tool calls and results "
-            "(the two flags are independent). Returns matching sessions with "
-            "a snippet of the first match."
+            "(the two flags are independent). Only the 250 newest sessions "
+            "are scanned, and at most 100 matches are returned. Results include "
+            "a snippet and the last message timestamp when available."
         ),
         "inputSchema": {
             "type": "object",
@@ -652,7 +837,10 @@ SESSION_TOOLS = [
                                    "description": "Also search tool calls and tool results "
                                                   "(default: messages only). Independent of "
                                                   "include_thinking."},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 100,
+                          "default": 20,
+                          "description": "Maximum matches to return; hard-capped at 100. "
+                                         "Search still scans only the 250 newest sessions."},
             },
             "required": ["query"],
         },
@@ -745,18 +933,18 @@ def _discover(scope: str, import_tools: bool = False) -> dict:
     }
 
 
-def _session_row(entry: dict) -> dict:
-    mtime = entry.get("mtime") or 0
-    stamp = ""
-    if mtime:
-        stamp = datetime.fromtimestamp(mtime, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+def _session_row(entry: dict, last_message_at: str = "",
+                 last_message_approximate: bool = False) -> dict:
     row = {
         "id": entry["id"],
         "source": entry.get("source"),
         "title": entry.get("title"),
         "cwd": entry.get("cwd") or entry.get("project") or "",
-        "mtime": stamp,
+        "mtime": _iso_timestamp(entry.get("mtime")),
+        "last_message_at": last_message_at,
     }
+    if last_message_approximate:
+        row["last_message_at_approximate"] = True
     if entry.get("native_id"):
         row["native_id"] = entry["native_id"]
     if entry.get("archived"):
@@ -772,6 +960,22 @@ def make_handler(backend: McpBackend, *, server_name: str = "fables-mcp",
                  server_version: str = "", scope: str = "in this library",
                  import_tools: bool = False) -> Callable[[str], dict | None]:
     """Build a ``handle_message(raw) -> dict | None`` for one backend."""
+    message_time_cache: dict[tuple[str, str, str], tuple[str, bool]] = {}
+
+    def message_timestamp(entry: dict, raw: str | None = None) -> tuple[str, bool]:
+        cache_key = (
+            str(entry.get("id") or ""), str(entry.get("mtime") or ""),
+            str(entry.get("size") or ""),
+        )
+        if raw is None and cache_key in message_time_cache:
+            return message_time_cache[cache_key]
+        try:
+            transcript = backend.load(entry["id"]) if raw is None else raw
+        except KeyError:
+            return "", False
+        result = _last_message_timestamp(parse_transcript(transcript))
+        message_time_cache[cache_key] = result
+        return result
 
     def tool_list_sessions(arguments: dict) -> str:
         query = str(arguments.get("query") or "").strip().lower()
@@ -799,7 +1003,8 @@ def make_handler(backend: McpBackend, *, server_name: str = "fables-mcp",
             if query:
                 if query not in session_haystack(entry):
                     continue
-            rows.append(_session_row(entry))
+            last_message_at, approximate = message_timestamp(entry)
+            rows.append(_session_row(entry, last_message_at, approximate))
             if len(rows) >= limit:
                 break
         if not rows:
@@ -872,28 +1077,36 @@ def make_handler(backend: McpBackend, *, server_name: str = "fables-mcp",
                 continue
             if archive_scope == "imported" and not entry.get("archived"):
                 continue
+            raw = None
             snippet = _identifier_match_snippet(entry, query)
             if snippet is None:
                 try:
                     raw = backend.load(entry["id"])
                 except KeyError:
                     continue
-                hay = render_transcript(raw, max_chars=SEARCH_RENDER_CHARS,
-                                        include_tools=include_tools,
-                                        include_thinking=include_thinking).lower()
+                hay = render_transcript(
+                    raw, max_chars=SEARCH_RENDER_CHARS,
+                    include_tools=include_tools,
+                    include_thinking=include_thinking,
+                    include_timestamps=False,
+                ).lower()
                 idx = hay.find(query)
                 if idx < 0:
                     continue
                 snippet = " ".join(
                     hay[max(0, idx - 100): idx + 200].split()
                 )[:MAX_SNIPPET_CHARS]
+            last_message_at, approximate = message_timestamp(entry, raw)
             match = {
                 "id": entry["id"],
                 "source": entry.get("source"),
                 "title": entry.get("title"),
                 "cwd": entry.get("cwd") or entry.get("project") or "",
+                "last_message_at": last_message_at,
                 "snippet": snippet,
             }
+            if approximate:
+                match["last_message_at_approximate"] = True
             if entry.get("native_id"):
                 match["native_id"] = entry["native_id"]
             matches.append(match)

@@ -196,8 +196,12 @@ Tools:
 - `get_session_provenance` — origins, provider/native identity, import IDs,
   hashes, completeness, attachments, and revision relationships
 - `list_sessions` — newest sessions, filterable by source and by a query
-  over title, cwd, opaque id, and native provider id (for example a pi UUID)
-- `get_session` — the conversation as readable text. **By default only user
+  over title, cwd, opaque id, and native provider id (for example a pi UUID).
+  Each row includes `last_message_at` when Fables can recover a user/assistant
+  message timestamp; this is deliberately separate from filesystem/session
+  `mtime`
+- `get_session` — the conversation as readable text with UTC timestamps on
+  message/item headings when the source recorded them. **By default only user
   and assistant messages are returned** (compact, resume-friendly context);
   pass `include_thinking: true` for reasoning blocks, `include_tools: true`
   for tool calls with arguments and tool results (the flags are independent),
@@ -206,8 +210,11 @@ Tools:
   (for example `pi:019ffc61-...`)
 - `search_sessions` — case-insensitive search over recent transcripts
   (messages by default; `include_thinking: true` also searches reasoning,
-  `include_tools: true` also searches tool content). Native provider ids
-  and opaque hashes match without scanning transcripts.
+  `include_tools: true` also searches tool content). Results include
+  `last_message_at` when available. Native provider ids and opaque hashes
+  match without scanning transcript text. The MCP tool scans only the **250
+  newest sessions** and returns at most **100 matches**; `limit` is hard-capped
+  at 100, so it is not an exhaustive all-history bulk export API.
 
 Resume across agents: end a session in pi, open Codex, and ask it to
 `get_session` with the pi UUID (or `list_sessions` with `source: "pi"`),

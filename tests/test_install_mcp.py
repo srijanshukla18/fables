@@ -247,6 +247,22 @@ class InstallMcpTests(unittest.TestCase):
         self.assertIn("codex", result.stdout)
         self.assertIn("registered", result.stdout)
         self.assertNotIn("not registered", result.stdout)
+        self.assertNotIn("stale", result.stdout)
+
+    def test_check_reports_stale_pi_sidecar(self):
+        run_installer(self.home)
+        sidecar = self.home / ".pi/agent/extensions/fables-mcp.json"
+        write_json(sidecar, {
+            "cmd": "/usr/bin/env",
+            "args": ["bash", "-lc", "exec python3 ~/.pi/agent/extensions/fables-mcp.py"],
+        })
+
+        result = run_installer(self.home, "--check")
+
+        self.assertEqual(result.returncode, 0)
+        pi_line = next(line for line in result.stdout.splitlines()
+                       if "pi (extension bridge)" in line)
+        self.assertIn("stale", pi_line)
 
     def test_remove_restores_every_config(self):
         run_installer(self.home)

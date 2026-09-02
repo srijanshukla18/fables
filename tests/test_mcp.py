@@ -2,6 +2,7 @@ import importlib.util
 import json
 import shutil
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -225,12 +226,15 @@ class McpProtocolTests(unittest.TestCase):
         )
         for tool in result["tools"]:
             self.assertIn("inputSchema", tool)
-        schemas = {tool["name"]: tool["inputSchema"]["properties"]
-                   for tool in result["tools"]}
+        tools = {tool["name"]: tool for tool in result["tools"]}
+        schemas = {name: tool["inputSchema"]["properties"]
+                   for name, tool in tools.items()}
         self.assertIn("include_thinking", schemas["get_session"])
         self.assertIn("include_tools", schemas["get_session"])
         self.assertIn("include_thinking", schemas["search_sessions"])
         self.assertIn("include_tools", schemas["search_sessions"])
+        self.assertIn("250", tools["search_sessions"]["description"])
+        self.assertIn("100", schemas["search_sessions"]["limit"]["description"])
         self.assertEqual(result["ttlMs"], 300_000)
         self.assertEqual(result["cacheScope"], "public")
 
@@ -292,6 +296,8 @@ class McpProtocolTests(unittest.TestCase):
                           "commandcode", "hermes"})
         pi_rows = json.loads(self.tool_text("list_sessions", {"source": "pi"}))
         self.assertEqual([row["source"] for row in pi_rows], ["pi"])
+        self.assertEqual(pi_rows[0]["last_message_at"], "2026-08-11T17:10:37Z")
+        self.assertNotEqual(pi_rows[0]["last_message_at"], pi_rows[0]["mtime"])
         needle = json.loads(self.tool_text(
             "list_sessions", {"query": "needle fixture"}))
         self.assertEqual(len(needle), 1)
@@ -307,8 +313,13 @@ class McpProtocolTests(unittest.TestCase):
         sid = rows[0]["id"]
         # Default: messages only — no tool calls, results, or thinking.
         transcript = self.tool_text("get_session", {"id": sid})
-        self.assertIn("## user\nPlease inspect the needle fixture.", transcript)
-        self.assertIn("## assistant\nLet me look.", transcript)
+        self.assertIn(
+            "## user · 2026-08-11T17:10:36Z\nPlease inspect the needle fixture.",
+            transcript,
+        )
+        self.assertIn(
+            "## assistant · 2026-08-11T17:10:37Z\nLet me look.", transcript,
+        )
         self.assertNotIn("## tool", transcript)
         self.assertNotIn("fixture contents", transcript)
         self.assertNotIn("> thinking", transcript)
@@ -317,7 +328,9 @@ class McpProtocolTests(unittest.TestCase):
         # Thinking without tool payloads.
         thinking = self.tool_text(
             "get_session", {"id": sid, "include_thinking": True})
-        self.assertIn("> thinking\nNeed a tool.", thinking)
+        self.assertIn(
+            "> thinking · 2026-08-11T17:10:37Z\nNeed a tool.", thinking,
+        )
         self.assertNotIn("## tool", thinking)
         self.assertNotIn("fixture contents", thinking)
         self.assertIn("include_tools=true", thinking)
@@ -338,7 +351,9 @@ class McpProtocolTests(unittest.TestCase):
         self.assertIn('"path": "fixture.txt"', full)
         self.assertIn("↳ fixture contents", full)
         self.assertIn("## tool · bash", full)
-        self.assertIn("> thinking\nNeed a tool.", full)
+        self.assertIn(
+            "> thinking · 2026-08-11T17:10:37Z\nNeed a tool.", full,
+        )
         self.assertIn("claude-fixture", full)
         self.assertNotIn("omitted", full)
 
@@ -350,12 +365,14 @@ class McpProtocolTests(unittest.TestCase):
             "include_thinking": True,
         })
         self.assertIn("models: gpt-fixture", transcript)
-        self.assertIn("## user\nHermes question", transcript)
-        self.assertIn("> thinking\nNeed the terminal.", transcript)
-        self.assertIn("## tool · terminal", transcript)
+        self.assertIn("## user · 1970-01-01T00:00:10Z\nHermes question", transcript)
+        self.assertIn("> thinking · 1970-01-01T00:00:11Z\nNeed the terminal.",
+                      transcript)
+        self.assertIn("## tool · terminal · 1970-01-01T00:00:11Z", transcript)
         self.assertIn('"command": "echo hermes"', transcript)
         self.assertIn("↳ hermes output", transcript)
-        self.assertIn("## assistant\nHermes answer", transcript)
+        self.assertIn("## assistant · 1970-01-01T00:00:13Z\nHermes answer",
+                      transcript)
 
     def test_get_session_json_returns_raw_archive(self):
         rows = json.loads(self.tool_text("list_sessions", {"source": "claude"}))
@@ -372,12 +389,15 @@ class McpProtocolTests(unittest.TestCase):
     def test_get_session_accepts_native_provider_id(self):
         native = "019ffc61-f135-743c-902d-aecdc76d6975"
         transcript = self.tool_text("get_session", {"id": native})
-        self.assertIn("## user\nPlease inspect the needle fixture.", transcript)
+        self.assertIn("## user · 2026-08-11T17:10:36Z\n"
+                      "Please inspect the needle fixture.", transcript)
         prefixed = self.tool_text("get_session", {"id": f"pi:{native}"})
-        self.assertIn("## user\nPlease inspect the needle fixture.", prefixed)
+        self.assertIn("## user · 2026-08-11T17:10:36Z\n"
+                      "Please inspect the needle fixture.", prefixed)
         prime = "019fdc23-44e1-75d9-ae35-1b8d60f712ad"
         prime_text = self.tool_text("get_session", {"id": prime})
-        self.assertIn("## user\nPrime question", prime_text)
+        self.assertIn("## user · 2026-08-07T12:12:08Z\nPrime question",
+                      prime_text)
 
     def test_get_session_ambiguous_native_id(self):
         write_jsonl(
@@ -412,6 +432,7 @@ class McpProtocolTests(unittest.TestCase):
         matches = json.loads(self.tool_text("search_sessions", {"query": "needle"}))
         self.assertEqual(len(matches), 1)
         self.assertEqual(matches[0]["source"], "pi")
+        self.assertEqual(matches[0]["last_message_at"], "2026-08-11T17:10:37Z")
         self.assertIn("needle", matches[0]["snippet"])
         # Tool output does NOT match by default…
         none = self.tool_text("search_sessions", {"query": "fixture contents"})
@@ -442,6 +463,86 @@ class McpProtocolTests(unittest.TestCase):
         self.assertEqual(len(by_uuid), 1)
         self.assertEqual(by_uuid[0]["source"], "pi")
         self.assertIn("native_id", by_uuid[0]["snippet"])
+
+    def test_codex_event_mirrors_do_not_duplicate_response_items(self):
+        raw = "\n".join(json.dumps(value) for value in [
+            {"type": "event_msg", "timestamp": "2026-08-12T10:00:00Z",
+             "payload": {"type": "user_message", "message": "Fix it"}},
+            {"type": "response_item", "timestamp": "2026-08-12T10:00:00Z",
+             "payload": {"type": "message", "role": "user", "content": [
+                 {"type": "input_text", "text": "Fix it"}]}},
+            {"type": "event_msg", "timestamp": "2026-08-12T10:00:01Z",
+             "payload": {"type": "agent_message", "message": "Done"}},
+            {"type": "response_item", "timestamp": "2026-08-12T10:00:01Z",
+             "payload": {"type": "message", "role": "assistant", "content": [
+                 {"type": "output_text", "text": "Done"}]}},
+        ])
+
+        parsed = fables_mcp.parse_transcript(raw)
+        messages = [item for item in parsed["items"]
+                    if item["kind"] in ("user", "assistant")]
+
+        self.assertEqual([(item["kind"], item["text"]) for item in messages], [
+            ("user", "Fix it"), ("assistant", "Done"),
+        ])
+        self.assertEqual([item["timestamp"] for item in messages], [
+            "2026-08-12T10:00:00Z", "2026-08-12T10:00:01Z",
+        ])
+
+    def test_normalized_archive_uses_raw_message_timestamps(self):
+        raw = json.dumps({
+            "fablesVersion": 2,
+            "meta": {"title": "Archived"},
+            "items": [
+                {"kind": "user", "text": "Question",
+                 "raw": [{"timestamp": "2026-08-13T11:12:13Z"}]},
+                {"kind": "assistant", "text": "Answer",
+                 "raw": [{"timestamp": "2026-08-13T11:12:14Z"}]},
+            ],
+        })
+
+        parsed = fables_mcp.parse_transcript(raw)
+        rendered = fables_mcp.render_transcript(raw)
+
+        self.assertEqual(parsed["items"][-1]["timestamp"],
+                         "2026-08-13T11:12:14Z")
+        self.assertIn("## assistant · 2026-08-13T11:12:14Z\nAnswer", rendered)
+
+    def test_cursor_inline_timestamp_is_inherited_as_approximate(self):
+        raw = json.dumps({
+            "fablesVersion": 2,
+            "meta": {"title": "Cursor"},
+            "items": [
+                {"kind": "user", "text": (
+                    "<timestamp>Tuesday, Aug 18, 2026, 6:33 PM "
+                    "(UTC+5:30)</timestamp>\nQuestion"
+                )},
+                {"kind": "assistant", "text": "Answer"},
+            ],
+        })
+
+        parsed = fables_mcp.parse_transcript(raw)
+
+        self.assertEqual(parsed["items"][0]["timestamp"],
+                         "2026-08-18T13:03:00Z")
+        self.assertEqual(parsed["items"][1]["timestamp"],
+                         "2026-08-18T13:03:00Z")
+        self.assertTrue(parsed["items"][1]["timestamp_approximate"])
+
+    def test_mcp_module_imports_from_outside_repo(self):
+        script = (
+            "import importlib.util; "
+            f"s=importlib.util.spec_from_file_location('standalone_fables_mcp', "
+            f"{str(ROOT / 'fables-mcp.py')!r}); "
+            "m=importlib.util.module_from_spec(s); s.loader.exec_module(m); "
+            "print(m.SERVER_NAME)"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", script], cwd=self.home,
+            capture_output=True, text=True, timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "fables-mcp")
 
     def test_legacy_initialize_handshake(self):
         # Codex CLI 0.147 and other clients still speak the pre-2026-07-28
@@ -496,15 +597,18 @@ class McpProtocolTests(unittest.TestCase):
         prime = json.loads(self.tool_text("list_sessions", {"source": "prime"}))
         self.assertEqual(len(prime), 1)
         transcript = self.tool_text("get_session", {"id": prime[0]["id"]})
-        self.assertIn("## user\nPrime question", transcript)
+        self.assertIn("## user · 2026-08-07T12:12:08Z\nPrime question",
+                      transcript)
         self.assertIn("Prime answer", transcript)
 
         cc = json.loads(self.tool_text("list_sessions", {"source": "commandcode"}))
         self.assertEqual(len(cc), 1)
         transcript = self.tool_text("get_session", {"id": cc[0]["id"],
                                                     "include_thinking": True})
-        self.assertIn("## user\nCommand Code question", transcript)
-        self.assertIn("> thinking\nThink first.", transcript)  # reasoning block
+        self.assertIn("## user · 2026-05-25T10:00:14.964Z\n"
+                      "Command Code question", transcript)
+        self.assertIn("> thinking · 2026-05-25T10:00:20.153Z\nThink first.",
+                      transcript)  # reasoning block
         self.assertIn("Command Code answer", transcript)
         tools_only = self.tool_text("get_session", {"id": cc[0]["id"],
                                                     "include_tools": True})

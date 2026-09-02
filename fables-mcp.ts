@@ -28,6 +28,8 @@ import { Type } from "typebox";
 const PROTOCOL_VERSION = "2026-07-28";
 const PREFIX = "fables_";
 const REQUEST_TIMEOUT_MS = 30_000;
+const CONNECT_TIMEOUTS_MS = [3_000, 10_000] as const;
+const CONNECT_RETRY_DELAY_MS = 150;
 
 interface ServerConfig {
 	cmd: string;
@@ -80,10 +82,16 @@ class McpClient {
 
 	private attach(process: ChildProcessWithoutNullStreams) {
 		process.stdout.setEncoding("utf8");
-		process.stdout.on("data", (chunk: string) => this.onData(chunk));
+		process.stdout.on("data", (chunk: string) => {
+			if (this.child === process) this.onData(chunk);
+		});
 		process.stderr.on("data", () => { /* server logs */ });
-		process.on("error", (error) => this.failAll(new Error(`fables-mcp failed to start: ${error.message}`)));
-		process.on("exit", () => this.failAll(new Error("fables-mcp exited")));
+		process.on("error", (error) => {
+			if (this.child === process) this.failAll(new Error(`fables-mcp failed to start: ${error.message}`));
+		});
+		process.on("exit", () => {
+			if (this.child === process) this.failAll(new Error("fables-mcp exited"));
+		});
 		// Detach from the event loop: without this, the child's stdio pipes keep pi
 		// alive after it would otherwise exit (headless --print never terminates).
 		// The server exits on its own once stdin closes.
@@ -121,43 +129,62 @@ class McpClient {
 			request.reject(error);
 		}
 		this.pending.clear();
+		this.buffer = "";
 		this.child = null;
 	}
 
-	kill(): void {
-		if (this.child) {
-			try { this.child.kill(); } catch { /* already gone */ }
-			this.child = null;
+	private stopChild(): void {
+		const process = this.child;
+		this.child = null;
+		this.buffer = "";
+		if (process) {
+			try { process.kill(); } catch { /* already gone */ }
 		}
+	}
+
+	kill(): void {
+		this.stopChild();
+		for (const request of this.pending.values()) {
+			clearTimeout(request.timer);
+			request.reject(new Error("fables-mcp session ended"));
+		}
+		this.pending.clear();
+	}
+
+	private async connectWithRetry(): Promise<boolean> {
+		let lastError: Error | undefined;
+		for (let attempt = 0; attempt < CONNECT_TIMEOUTS_MS.length; attempt++) {
+			this.stopChild();
+			try {
+				const process = spawn(this.config.cmd, this.config.args, { stdio: ["pipe", "pipe", "pipe"] });
+				this.attach(process);
+				this.child = process;
+				await this.request("server/discover", {}, CONNECT_TIMEOUTS_MS[attempt]);
+				return true;
+			} catch (error) {
+				lastError = error as Error;
+				this.stopChild();
+				if (attempt + 1 < CONNECT_TIMEOUTS_MS.length) {
+					await new Promise((resolve) => setTimeout(resolve, CONNECT_RETRY_DELAY_MS));
+				}
+			}
+		}
+		console.error(`fables-mcp: server unusable after retry: ${lastError?.message ?? "unknown error"}`);
+		return false;
 	}
 
 	async ensureConnected(): Promise<boolean> {
 		if (this.child && this.child.exitCode === null) return true;
 		if (this.connectPromise) return this.connectPromise;
-		this.connectPromise = (async () => {
-			try {
-				this.child?.kill();
-			} catch {
-				// already gone
-			}
-			const process = spawn(this.config.cmd, this.config.args, { stdio: ["pipe", "pipe", "pipe"] });
-			this.attach(process);
-			this.child = process;
-			try {
-				await this.request("server/discover", {});
-				return true;
-			} catch (error) {
-				console.error(`fables-mcp: server unusable: ${(error as Error).message}`);
-				try { process.kill(); } catch { /* noop */ }
-				this.child = null;
-				return false;
-			}
-		})();
-		this.connectPromise.then(() => { this.connectPromise = null; });
-		return this.connectPromise;
+		const promise = this.connectWithRetry();
+		this.connectPromise = promise;
+		void promise.finally(() => {
+			if (this.connectPromise === promise) this.connectPromise = null;
+		});
+		return promise;
 	}
 
-	request(method: string, params: Record<string, unknown>): Promise<unknown> {
+	request(method: string, params: Record<string, unknown>, timeoutMs = REQUEST_TIMEOUT_MS): Promise<unknown> {
 		return new Promise((resolve, reject) => {
 			if (!this.child || this.child.exitCode !== null) {
 				reject(new Error("fables-mcp is not connected"));
@@ -167,7 +194,7 @@ class McpClient {
 			const timer = setTimeout(() => {
 				this.pending.delete(id);
 				reject(new Error(`fables-mcp ${method} timed out`));
-			}, REQUEST_TIMEOUT_MS);
+			}, timeoutMs);
 			this.pending.set(id, { resolve, reject, timer });
 			const message = {
 				jsonrpc: "2.0",
@@ -181,7 +208,13 @@ class McpClient {
 					},
 				},
 			};
-			this.child.stdin.write(JSON.stringify(message) + "\n");
+			try {
+				this.child.stdin.write(JSON.stringify(message) + "\n");
+			} catch (error) {
+				clearTimeout(timer);
+				this.pending.delete(id);
+				reject(error as Error);
+			}
 		});
 	}
 

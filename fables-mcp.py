@@ -44,6 +44,12 @@ import time
 from pathlib import Path
 from typing import Any
 
+# ``importlib.util.spec_from_file_location`` does not add this file's directory
+# to sys.path. Keep standalone embedders working when their cwd is elsewhere.
+_MODULE_DIR = str(Path(__file__).resolve().parent)
+if _MODULE_DIR not in sys.path:
+    sys.path.insert(0, _MODULE_DIR)
+
 from fables_library import Library, LibraryError
 from mcp_protocol import (
     McpBackend,
@@ -57,7 +63,7 @@ from mcp_protocol import (
 from providers import discover, load_target
 
 SERVER_NAME = "fables-mcp"
-SERVER_VERSION = "0.2.0"
+SERVER_VERSION = "0.3.0"
 
 _HOME: Path | None = None  # overridden by --home or by tests
 _LIBRARY: Path | None = None

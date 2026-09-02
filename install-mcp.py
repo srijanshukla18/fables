@@ -798,8 +798,22 @@ def agent_pi(home: Path, server: tuple[str, list[str]], mode: str) -> tuple[str,
     extension_dir = home / ".pi" / "agent" / "extensions"
     source = Path(__file__).resolve().parent / "fables-mcp.ts"
     if mode == "check":
-        return ("registered" if (extension_dir / "fables-mcp.ts").exists()
-                else "not registered", str(extension_dir / "fables-mcp.ts"))
+        target = extension_dir / "fables-mcp.ts"
+        sidecar = extension_dir / "fables-mcp.json"
+        if not target.is_file() or not sidecar.is_file():
+            return "not registered", str(target)
+        expected = {"cmd": server[0], "args": list(server[1])}
+        bridge_current = source.is_file() and target.read_text(encoding="utf-8") == \
+            source.read_text(encoding="utf-8")
+        server_current = json_load(sidecar) == expected
+        if bridge_current and server_current:
+            return "registered", str(target)
+        reasons = []
+        if not bridge_current:
+            reasons.append("bridge differs from installed version")
+        if not server_current:
+            reasons.append("server target differs from installed version")
+        return "stale", f"{target}; {', '.join(reasons)}"
     if mode == "remove":
         removed = []
         for name in ("fables-mcp.ts", "fables-mcp.json"):

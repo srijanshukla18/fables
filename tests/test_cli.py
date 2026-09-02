@@ -69,7 +69,8 @@ class CliTests(unittest.TestCase):
         self.assertEqual(json.loads(searched.stdout)["result"]["matches"][0]["id"], sid)
 
         markdown = self.run_cli("session", "get", sid, "--format", "markdown")
-        self.assertIn("## user\nfind this passage", markdown.stdout)
+        self.assertIn("## user · ≈ 1970-01-01T00:01:40Z\nfind this passage",
+                      markdown.stdout)
 
         provenance = self.run_cli("session", "provenance", sid, "--format", "json")
         value = json.loads(provenance.stdout)["result"]
