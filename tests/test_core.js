@@ -186,6 +186,16 @@ test("Hermes SQLite archives preserve messages, reasoning, tools, and metadata",
   assert.equal(parsed.meta.diagnostics.orphanResults, 0);
 });
 
+test("display groups separate messages from tool-heavy transcript details", () => {
+  assert.equal(Core.itemDisplayGroup({ kind: "user" }), "messages");
+  assert.equal(Core.itemDisplayGroup({ kind: "assistant" }), "messages");
+  assert.equal(Core.itemDisplayGroup({ kind: "tool" }), "tools");
+  assert.equal(Core.itemDisplayGroup({ kind: "command" }), "tools");
+  assert.equal(Core.itemDisplayGroup({ kind: "thinking" }), "thinking");
+  assert.equal(Core.itemDisplayGroup({ kind: "info" }), "info");
+  assert.equal(Core.itemDisplayGroup({ kind: "future-kind" }), "info");
+});
+
 test("standalone archives exclude hidden categories and redact sensitive text", () => {
   const parsed = Core.parseSession(read("claude.jsonl"), "claude", "claude");
   parsed.items.push({

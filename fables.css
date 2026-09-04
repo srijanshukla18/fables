@@ -1,20 +1,21 @@
 :root {
-  --bg: #0e0e11;
-  --panel: #151518;
-  --panel-2: #1c1c21;
-  --line: #2a2a31;
-  --line-soft: #222228;
-  --ink: #ededf1;
-  --muted: #a2a2ad;
-  --faint: #6e6e7a;
-  --amber: #e8b15c;
-  --amber-dim: #9a7638;
-  --coral: #e0785c;
-  --teal: #6fd6c2;
-  --violet: #b0a1e0;
-  --red: #ef6e62;
-  --green: #8fd07e;
-  --blue: #7fb0f0;
+  --bg: #f8f6f1;
+  --panel: #fffdf9;
+  --panel-2: #f0ede6;
+  --line: #d8d2c7;
+  --line-soft: #e8e3da;
+  --ink: #27241f;
+  --muted: #666159;
+  --faint: #898279;
+  --amber: #9b641d;
+  --amber-dim: #b88642;
+  --coral: #b6533a;
+  --teal: #24796c;
+  --violet: #69539a;
+  --red: #b43d34;
+  --green: #3f7635;
+  --blue: #28699f;
+  color-scheme: light;
   --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
@@ -39,7 +40,7 @@ body {
 }
 
 ::selection {
-  background: rgba(232, 177, 92, 0.28);
+  background: rgba(184, 134, 66, 0.26);
   color: var(--ink);
 }
 
@@ -48,7 +49,7 @@ a {
 }
 
 a:hover {
-  color: #a5c8f7;
+  color: #174e7a;
 }
 
 button,
@@ -308,18 +309,18 @@ body.standalone .exportall {
 }
 
 .source-claude { --source-color: var(--coral); }
-.source-cowork { --source-color: #d6a45d; }
+.source-cowork { --source-color: #9b6a25; }
 .source-codex { --source-color: var(--teal); }
 .source-copilot { --source-color: var(--blue); }
-.source-cursor { --source-color: #c792d4; }
-.source-gemini { --source-color: #8eb8ff; }
+.source-cursor { --source-color: #875696; }
+.source-gemini { --source-color: #426fae; }
 .source-opencode { --source-color: var(--green); }
-.source-continue { --source-color: #d18cc7; }
-.source-cline { --source-color: #ef8d68; }
-.source-roo { --source-color: #be92ef; }
-.source-goose { --source-color: #e2c66f; }
-.source-hermes { --source-color: #f0a45d; }
-.source-vscode { --source-color: #69a9e8; }
+.source-continue { --source-color: #995584; }
+.source-cline { --source-color: #ad5135; }
+.source-roo { --source-color: #7952a5; }
+.source-goose { --source-color: #8c741e; }
+.source-hermes { --source-color: #a65d20; }
+.source-vscode { --source-color: #3271a7; }
 
 .card .proj {
   overflow: hidden;
@@ -428,8 +429,8 @@ body.standalone .actions {
 }
 
 .badge.archived {
-  border-color: rgba(91, 155, 213, 0.45);
-  color: #8bbde8;
+  border-color: rgba(40, 105, 159, 0.4);
+  color: var(--blue);
 }
 
 .badge.warning {
@@ -438,7 +439,7 @@ body.standalone .actions {
 }
 
 .metastrip .archiveorigin {
-  color: #8bbde8;
+  color: var(--blue);
 }
 
 .metastrip .src {
@@ -557,6 +558,67 @@ body.standalone .actions {
   color: var(--faint);
   font-family: var(--mono);
   font-size: 10.5px;
+}
+
+.viewfilters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-top: 9px;
+  border: 0;
+}
+
+.viewfilterlabel {
+  margin-right: 2px;
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 27px;
+  text-transform: uppercase;
+}
+
+.viewfilters label {
+  position: relative;
+  cursor: pointer;
+}
+
+.viewfilters input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+}
+
+.viewfilters label span {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: 99px;
+  background: var(--bg);
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
+.viewfilters b {
+  font-weight: 500;
+  opacity: 0.75;
+}
+
+.viewfilters input:checked + span {
+  border-color: var(--amber-dim);
+  background: rgba(184, 134, 66, 0.1);
+  color: var(--amber);
+}
+
+.viewfilters input:focus-visible + span {
+  outline: 2px solid var(--amber);
+  outline-offset: 2px;
 }
 
 .scroll {
@@ -753,9 +815,9 @@ body.standalone .actions {
   padding: 10px 15px;
   border: 1px solid var(--line);
   border-radius: 16px 16px 5px 16px;
-  background: #232329;
-  border-color: #303038;
-  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.3);
+  background: #eee9df;
+  border-color: #d8d0c2;
+  box-shadow: 0 1px 1px rgba(64, 48, 28, 0.08);
 }
 
 .prose p {
@@ -817,7 +879,7 @@ body.standalone .actions {
   overflow-x: auto;
   border: 1px solid var(--line-soft);
   border-radius: 10px;
-  background: #0a0a0d;
+  background: #f1eee8;
 }
 
 .prose pre.code[data-lang]::after {
@@ -835,7 +897,7 @@ body.standalone .actions {
   padding: 0;
   border: 0;
   background: none;
-  color: #d6d6de;
+  color: #34312b;
   font-size: 12.5px;
   line-height: 1.55;
   white-space: pre;
@@ -985,8 +1047,8 @@ pre.rawview {
   padding: 10px 12px;
   overflow-y: auto;
   border-radius: 8px;
-  background: #0a0a0d;
-  color: #c9c9d2;
+  background: #f1eee8;
+  color: #3d3933;
   font-family: var(--mono);
   font-size: 11.5px;
   line-height: 1.55;
@@ -1137,6 +1199,7 @@ pre.rawview {
 }
 
 dialog {
+  color-scheme: light;
   width: min(560px, calc(100vw - 32px));
   max-height: calc(100vh - 40px);
   margin: auto;
@@ -1146,7 +1209,7 @@ dialog {
   border-radius: 10px;
   background: var(--panel);
   color: var(--ink);
-  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
+  box-shadow: 0 24px 80px rgba(47, 38, 27, 0.24);
 }
 
 dialog::backdrop {

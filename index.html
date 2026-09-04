@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="color-scheme" content="dark">
+  <meta name="color-scheme" content="light">
   <title>Fables · a reader for agent chronicles</title>
   <link rel="stylesheet" href="/fables.css">
 </head>
@@ -82,11 +82,30 @@
         <input
           type="search"
           id="insearch"
-          aria-label="Search within this session"
-          placeholder="search every passage in this session…"
+          aria-label="Search within visible session passages"
+          placeholder="search visible passages…"
           autocomplete="off"
         >
         <span class="searchstatus" id="searchStatus"></span>
+      </div>
+      <div class="viewfilters" role="group" aria-label="Choose passage types to show">
+        <span class="viewfilterlabel">show</span>
+        <label>
+          <input type="checkbox" id="showMessages" checked>
+          <span>messages <b id="messageCount">0</b></span>
+        </label>
+        <label>
+          <input type="checkbox" id="showTools">
+          <span>tools <b id="toolCount">0</b></span>
+        </label>
+        <label>
+          <input type="checkbox" id="showThinking">
+          <span>thinking <b id="thinkingCount">0</b></span>
+        </label>
+        <label>
+          <input type="checkbox" id="showInfo">
+          <span>system <b id="infoCount">0</b></span>
+        </label>
       </div>
     </header>
     <div class="providerstatus" id="loadingStatus" hidden></div>

@@ -39,6 +39,7 @@ const state = {
   runChangedByIndex: [],
   observer: null,
   query: "",
+  visibleGroups: new Set(["messages"]),
   requestController: null,
   requestSerial: 0,
   searchTimer: null,
@@ -413,10 +414,10 @@ function rawButton(item, element) {
   element.appendChild(button);
 }
 
-function renderItem(item, index, turnNo, runChanged, forceTurnMark) {
+function renderItem(item, index, turnNo, runChanged, forceTurnMark, searchContext) {
   const fragment = document.createDocumentFragment();
   if ((item.kind === "user" && !item.side) || forceTurnMark) {
-    fragment.appendChild(turnMark(turnNo, item, forceTurnMark));
+    fragment.appendChild(turnMark(turnNo, item, searchContext));
   }
   const label = runLabel(item.run);
   if (runChanged && label) {
@@ -568,17 +569,19 @@ function renderChunk() {
   const container = $("transcript");
   const end = Math.min(state.renderedUpto + CHUNK, state.renderQueue.length);
   const fragment = document.createDocumentFragment();
+  const filteredView = !!state.query || state.visibleGroups.size < 4;
   for (let position = state.renderedUpto; position < end; position++) {
     const index = state.renderQueue[position];
     const previousIndex = position > 0 ? state.renderQueue[position - 1] : -1;
-    const forceTurn = !!state.query &&
+    const forceTurn = filteredView &&
       (position === 0 || state.turnByIndex[index] !== state.turnByIndex[previousIndex]);
     fragment.appendChild(renderItem(
       state.parsed.items[index],
       index,
       state.turnByIndex[index],
       state.runChangedByIndex[index],
-      forceTurn
+      forceTurn,
+      !!state.query
     ));
   }
   state.renderedUpto = end;
@@ -592,6 +595,7 @@ function resetTranscript(query, scrollToTop) {
   state.query = query.length >= 2 ? query.toLowerCase() : "";
   state.renderQueue = state.parsed.items
     .map((item, index) => ({ item, index }))
+    .filter(({ item }) => state.visibleGroups.has(Core.itemDisplayGroup(item)))
     .filter(({ item }) => !state.query ||
       String(item.search || Core.itemSearchText(item)).includes(state.query))
     .map(({ index }) => index);
@@ -605,10 +609,33 @@ function resetTranscript(query, scrollToTop) {
   state.observer.observe($("sentinel"));
   renderChunk();
   if (scrollToTop) $("scrollpane").scrollTop = 0;
-  $("searchStatus").textContent = state.query ?
-    state.renderQueue.length + " of " + state.parsed.items.length + " passages" :
+  const filtered = state.query || state.visibleGroups.size < 4;
+  $("searchStatus").textContent = filtered ?
+    state.renderQueue.length + " visible of " + state.parsed.items.length + " passages" :
     state.parsed.items.length + " passages";
   setLive($("searchStatus").textContent);
+}
+
+function updateViewFilterCounts(items) {
+  const counts = { messages: 0, tools: 0, thinking: 0, info: 0 };
+  for (const item of items) counts[Core.itemDisplayGroup(item)]++;
+  $("messageCount").textContent = counts.messages;
+  $("toolCount").textContent = counts.tools;
+  $("thinkingCount").textContent = counts.thinking;
+  $("infoCount").textContent = counts.info;
+}
+
+function applyViewFilters() {
+  const controls = {
+    messages: "showMessages",
+    tools: "showTools",
+    thinking: "showThinking",
+    info: "showInfo",
+  };
+  state.visibleGroups = new Set(Object.entries(controls)
+    .filter(([, id]) => $(id).checked)
+    .map(([group]) => group));
+  if (state.parsed) resetTranscript($("insearch").value.trim(), true);
 }
 
 function diagnosticDetails(meta) {
@@ -730,6 +757,7 @@ function renderHeader() {
   const tools = items.filter((item) => item.kind === "tool").length;
   counts.innerHTML = "<b>" + turns + "</b> turns · <b>" + tools + "</b> tool calls";
   strip.appendChild(counts);
+  updateViewFilterCounts(items);
   diagnosticDetails(meta);
 }
 
@@ -1674,6 +1702,9 @@ $("originFilter").addEventListener("change", () => {
   renderShelf();
 });
 $("insearch").addEventListener("input", handleSearchInput);
+for (const id of ["showMessages", "showTools", "showThinking", "showInfo"]) {
+  $(id).addEventListener("change", applyViewFilters);
+}
 $("shareBtn").addEventListener("click", openShareReview);
 $("exportAllBtn").addEventListener("click", openExportAllReview);
 $("shelftoggle").addEventListener("click", toggleShelf);

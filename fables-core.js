@@ -1988,6 +1988,14 @@
     ].filter(Boolean).join(" ").toLowerCase();
   }
 
+  function itemDisplayGroup(item) {
+    const kind = item && item.kind;
+    if (kind === "user" || kind === "assistant") return "messages";
+    if (kind === "tool" || kind === "command") return "tools";
+    if (kind === "thinking") return "thinking";
+    return "info";
+  }
+
   const SECRET_PATTERNS = [
     /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
     /\b(?:sk-(?:proj-)?|sk-ant-|github_pat_|gh[pousr]_|xox[baprs]-)[A-Za-z0-9_-]{8,}\b/g,
@@ -2172,6 +2180,7 @@
   return {
     detectFormat,
     inspectSensitive,
+    itemDisplayGroup,
     itemSearchText,
     makeLibraryArchive,
     makeShareArchive,
