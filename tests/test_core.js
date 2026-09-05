@@ -186,6 +186,23 @@ test("Hermes SQLite archives preserve messages, reasoning, tools, and metadata",
   assert.equal(parsed.meta.diagnostics.orphanResults, 0);
 });
 
+test("pi assistant failures remain visible when the provider returns no content", () => {
+  const raw = [
+    { type: "session", timestamp: "2026-01-01T00:00:00Z", cwd: "/tmp/demo" },
+    { type: "message", timestamp: "2026-01-01T00:00:01Z",
+      message: { role: "user", content: [{ type: "text", text: "hello" }] } },
+    { type: "message", timestamp: "2026-01-01T00:00:02Z",
+      message: { role: "assistant", content: [], stopReason: "error",
+        errorMessage: "404 provider route not found" } },
+  ].map(JSON.stringify).join("\n");
+  const parsed = Core.parseSession(raw, "pi", "pi");
+  const failure = parsed.items.find((item) => item.label === "assistant error");
+  assert.ok(failure);
+  assert.equal(failure.text, "404 provider route not found");
+  assert.equal(failure.isError, true);
+  assert.equal(Core.itemDisplayGroup(failure), "messages");
+});
+
 test("display groups separate messages from tool-heavy transcript details", () => {
   assert.equal(Core.itemDisplayGroup({ kind: "user" }), "messages");
   assert.equal(Core.itemDisplayGroup({ kind: "assistant" }), "messages");

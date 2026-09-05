@@ -196,6 +196,45 @@ def _first_lines(path: Path, max_bytes: int = PREVIEW_BYTES) -> Iterable[dict]:
             yield value
 
 
+def _last_json_objects(path: Path, block_size: int = 65536) -> Iterable[dict]:
+    """Yield JSONL objects newest-first without reading the whole file."""
+    try:
+        with path.open("rb") as handle:
+            position = handle.seek(0, 2)
+            partial = b""
+            while position > 0:
+                size = min(block_size, position)
+                position -= size
+                handle.seek(position)
+                parts = (handle.read(size) + partial).split(b"\n")
+                if position:
+                    partial = parts[0]
+                    complete = parts[1:]
+                else:
+                    partial = b""
+                    complete = parts
+                for raw in reversed(complete):
+                    if not raw.strip():
+                        continue
+                    try:
+                        value = json.loads(raw.decode("utf-8", errors="replace"))
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(value, dict):
+                        yield value
+    except OSError:
+        return
+
+
+def _last_message_timestamp(path: Path) -> float:
+    for obj in _last_json_objects(path):
+        if obj.get("type") == "message":
+            timestamp = _timestamp(obj.get("timestamp"))
+            if timestamp:
+                return timestamp
+    return 0.0
+
+
 def _text(value: Any) -> str:
     if isinstance(value, str):
         return value.strip()
@@ -280,10 +319,9 @@ def pi_metadata(path: Path) -> tuple[str, str, float, set[str], str]:
     title = ""
     cwd = ""
     session_id = ""
-    latest = 0.0
+    latest = _last_message_timestamp(path)
     models: set[str] = set()
     for obj in _first_lines(path):
-        latest = max(latest, _timestamp(obj.get("timestamp")))
         kind = obj.get("type")
         if kind == "session":
             cwd = str(obj.get("cwd") or "")

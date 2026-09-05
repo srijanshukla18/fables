@@ -512,7 +512,7 @@ function renderItem(item, index, turnNo, runChanged, forceTurnMark, searchContex
     command.textContent = "» " + (item.text || "");
     element.appendChild(command);
   } else {
-    element.className += " info";
+    element.className += " info" + (item.isError ? " error" : "");
     if (String(item.text || "").length > 120) {
       const details = document.createElement("details");
       details.className = "info";
@@ -755,7 +755,9 @@ function renderHeader() {
   counts.className = "kv";
   const turns = items.filter((item) => item.kind === "user" && !item.side).length;
   const tools = items.filter((item) => item.kind === "tool").length;
-  counts.innerHTML = "<b>" + turns + "</b> turns · <b>" + tools + "</b> tool calls";
+  const errors = items.filter((item) => item.isError && item.kind !== "tool").length;
+  counts.innerHTML = "<b>" + turns + "</b> turns · <b>" + tools + "</b> tool calls" +
+    (errors ? " · <b>" + errors + "</b> errors" : "");
   strip.appendChild(counts);
   updateViewFilterCounts(items);
   diagnosticDetails(meta);
@@ -1567,6 +1569,12 @@ function handleSearchInput() {
   }, 80);
 }
 
+function renderAllForPrint() {
+  while (state.parsed && state.renderedUpto < state.renderQueue.length) {
+    renderChunk();
+  }
+}
+
 function activeInput() {
   const active = document.activeElement;
   return active && (
@@ -1718,6 +1726,7 @@ for (const checkbox of $("shareDialog").querySelectorAll('input[type="checkbox"]
   checkbox.addEventListener("change", updateShareReview);
 }
 window.addEventListener("keydown", handleKeys);
+window.addEventListener("beforeprint", renderAllForPrint);
 window.addEventListener("hashchange", () => {
   const session = routeSession();
   if (session && (!state.current || session.id !== state.current.id)) {

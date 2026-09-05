@@ -86,6 +86,27 @@ class ProviderTests(unittest.TestCase):
         prefixed = providers.resolve_session_entry(f"pi:{native}", result.sessions)
         self.assertEqual(prefixed["id"], entry["id"])
 
+    def test_pi_scan_sorts_from_last_message_beyond_metadata_preview(self):
+        path = write_jsonl(
+            self.home / ".pi/agent/sessions/large.jsonl",
+            [
+                {"type": "session", "id": "large", "timestamp": "2026-01-01T00:00:00Z"},
+                {"type": "message", "timestamp": "2026-01-01T00:00:01Z",
+                 "message": {"role": "user", "content": "first prompt"}},
+                {"type": "message", "timestamp": "2026-01-01T00:00:02Z",
+                 "message": {"role": "assistant", "content": [
+                     {"type": "text", "text": "x" * (providers.PREVIEW_BYTES + 1000)}]}},
+                {"type": "message", "timestamp": "2026-01-02T03:04:05Z",
+                 "message": {"role": "user", "content": "latest prompt"}},
+            ],
+        )
+        self.assertGreater(path.stat().st_size, providers.PREVIEW_BYTES)
+
+        entry = providers.scan_pi(self.home).sessions[0]
+
+        self.assertEqual(entry["title"], "first prompt")
+        self.assertEqual(entry["mtime"], providers._timestamp("2026-01-02T03:04:05Z"))
+
     def test_claude_and_codex_metadata_and_raw_loaders(self):
         claude = write_jsonl(
             self.home / ".claude/projects/-work-demo/session.jsonl",

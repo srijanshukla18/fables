@@ -484,6 +484,16 @@
                 noteUnsupported(meta.diagnostics, "pi.assistant." + block.type);
               }
             }
+            if (String(message.errorMessage || "").trim()) {
+              items.push({
+                kind: "info",
+                label: "assistant error",
+                ts: obj.timestamp,
+                text: message.errorMessage,
+                isError: true,
+                raw: [obj],
+              });
+            }
           } else if (message.role === "toolResult") {
             const tool = pending.get(message.toolCallId);
             const text = outputText(message.content);
@@ -1990,6 +2000,7 @@
 
   function itemDisplayGroup(item) {
     const kind = item && item.kind;
+    if (item && item.isError && kind !== "tool") return "messages";
     if (kind === "user" || kind === "assistant") return "messages";
     if (kind === "tool" || kind === "command") return "tools";
     if (kind === "thinking") return "thinking";

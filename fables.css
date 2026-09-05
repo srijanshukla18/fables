@@ -1104,6 +1104,12 @@ details.tool pre.errout {
   text-transform: uppercase;
 }
 
+.info.error .ilabel {
+  border-color: rgba(180, 61, 52, 0.28);
+  background: rgba(180, 61, 52, 0.08);
+  color: var(--red);
+}
+
 details.info pre {
   max-height: 300px;
   margin-top: 6px;
@@ -1350,5 +1356,82 @@ dialog::backdrop {
     align-items: flex-start;
     flex-direction: column;
     gap: 5px;
+  }
+}
+
+@media print {
+  @page {
+    margin: 14mm;
+  }
+
+  html,
+  body {
+    height: auto;
+    overflow: visible;
+    background: #fff;
+  }
+
+  body {
+    display: block;
+    color: #111;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
+  .sidebar,
+  .shelfbackdrop,
+  .shelftoggle,
+  .actions,
+  .searchrow,
+  .viewfilters,
+  .diagnostics,
+  .providerstatus,
+  .copybtn,
+  .rawbtn,
+  dialog,
+  .livestatus {
+    display: none !important;
+  }
+
+  .main {
+    display: block;
+    height: auto;
+    overflow: visible;
+  }
+
+  .mainhead {
+    padding: 0 0 16px;
+    background: #fff;
+  }
+
+  .scroll {
+    height: auto;
+    overflow: visible;
+  }
+
+  .transcript {
+    width: auto;
+    margin: 0;
+    padding: 22px 0 0 28px;
+  }
+
+  .transcript::before {
+    display: none;
+  }
+
+  .item,
+  .turnmark,
+  details.tool,
+  details.think,
+  details.info {
+    break-inside: avoid-page;
+  }
+
+  .turnmark {
+    break-after: avoid-page;
+  }
+
+  .endmark {
+    margin-top: 28px;
   }
 }
